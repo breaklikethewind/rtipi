@@ -45,6 +45,30 @@
 #define EchoPin 7 // Raspberry pi gpio4
 #define TriggerPin 0 // Raspberry pi gpio 17
 
+typedef struct
+{
+    unsigned int humidity_alarm_setpoint;
+    unsigned int temp_alarm_setpoint;
+    unsigned int distance_alarm_setpoint;
+    bool beeper_state;
+    char beeper_message[128];
+} control_t;
+
+typedef struct
+{
+    unsigned int humidity;
+    unsigned int temp;
+    unsigned int distance;
+    bool beeper;
+} status_t;
+
+control_t control;
+status_t status;
+pthread_mutex_t lock; // sync between UDP thread and main
+void *sump_control( void *ptr );
+void *udp_control( void *ptr );
+bool sump_exit = false;
+
 void *udp_control( void *ptr ) {
 
    int sockfd,n;
@@ -65,46 +89,56 @@ void *udp_control( void *ptr ) {
 #error need to create/handle UDP messages
    for (;;)
    {
-      len = sizeof(cliaddr);
-      n = recvfrom(sockfd,mesg,1000,0,(struct sockaddr *)&cliaddr,&len);
-      printf("-------------------------------------------------------\n");
-      mesg[n] = 0;
-      printf("Received the following:\n");
-      printf("%s",mesg);
-      printf("-------------------------------------------------------\n");
+        len = sizeof(cliaddr);
+        n = recvfrom(sockfd,mesg,1000,0,(struct sockaddr *)&cliaddr,&len);
+        printf("-------------------------------------------------------\n");
+        mesg[n] = 0;
+        printf("Received the following:\n");
+        printf("%s",mesg);
+        printf("-------------------------------------------------------\n");
 
-      if (strncmp(mesg, "GETHUMIDITY", 11) == 0) {
-	pthread_mutex_lock(&lock);
-      	sprintf(sendmesg, "HUMIDITY=%d\r\n", (int)humidity);
-	pthread_mutex_unlock(&lock);
-      	sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-      }
-      else if (strncmp(mesg, "GETSETPOINT", 11) == 0) {
-	pthread_mutex_lock(&lock);
-      	sprintf(sendmesg, "SETPOINT=%d\r\n", targetHumidity);
-	pthread_mutex_unlock(&lock);
-      	sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-      }
-      else if (strncmp(mesg, "SETPOINT=Up 1%", 13) == 0) {
-	pthread_mutex_lock(&lock);
-      	targetHumidity += 1;
-      	sprintf(sendmesg, "SETPOINT=%d\r\n", targetHumidity);
-	pthread_mutex_unlock(&lock);
-      	sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-      }
-      else if (strncmp(mesg, "SETPOINT=Down 1%", 15) == 0) {
-	pthread_mutex_lock(&lock);
-      	targetHumidity -= 1;
-      	sprintf(sendmesg, "SETPOINT=%d\r\n", targetHumidity);
-	pthread_mutex_unlock(&lock);
-      	sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-      }
-      else {
-      	sprintf(sendmesg, "INVALID COMMAND\r\n");
-      	sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-      }
-
-   }
+        if (strncmp(mesg, "GETHUMIDITY", 11) == 0) 
+        {
+            pthread_mutex_lock(&lock);
+            sprintf(sendmesg, "HUMIDITY=%d\r\n", (int)status.humidity);
+            pthread_mutex_unlock(&lock);
+            sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+        }
+        else if (strncmp(mesg, "GETTEMP", 7) == 0) 
+        {
+            pthread_mutex_lock(&lock);
+            sprintf(sendmesg, "TEMP=%d\r\n", status.temp);
+            pthread_mutex_unlock(&lock);
+            sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+        }
+        else if (strncmp(mesg, "GETDISTANCE", 11) == 0) 
+        {
+            pthread_mutex_lock(&lock);
+            sprintf(sendmesg, "DISTANCE=%d\r\n", status.distance);
+            pthread_mutex_unlock(&lock);
+            sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+        }
+        else if (strncmp(mesg, "GETBEEPER", 15) == 0) 
+        {
+            pthread_mutex_lock(&lock);
+            sprintf(sendmesg, "BEEPER=%s\r\n", (status.beeper) ? "on":"off");
+            pthread_mutex_unlock(&lock);
+            sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+        }
+        else if (strncmp(mesg, "SHUTDOWN", 8) == 0)
+        {
+            pthread_mutex_lock(&lock);
+            sprintf(sendmesg, "SHUTDOWN=true\r\n");
+            pthread_mutex_unlock(&lock);
+            sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+            sump_shutdown = true;          
+        }
+        else 
+        {
+            sprintf(sendmesg, "INVALID COMMAND\r\n");
+            sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+        }
+    }
 }
 
 void *sump_control( void *ptr ) 
@@ -112,7 +146,11 @@ void *sump_control( void *ptr )
 #error need to write sump control (currently using sample)
 	
 	for (;;) { 
-
+        
+        pthread_mutex_lock(&lock);
+        status.distance = RangeMeasure(5);
+        pthread_mutex_unlock(&lock);
+       
 		delay(READING_INTERVAL);
 	}
 }
@@ -186,6 +224,8 @@ int  main(void)
         exit(EXIT_FAILURE);
     }
 
+    while (!sump_exit);
+    
 	// Exit	
 	pthread_join(sumpControl, NULL);
 	pthread_join(udpControl, NULL);
