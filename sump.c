@@ -110,50 +110,8 @@ void *udp_control( void *ptr ) {
 void *sump_control( void *ptr ) 
 {
 #error need to write sump control (currently using sample)
-	printf("THREAD LED\r\n");	
-
-	// reset them all to off
-	digitalWrite(LED_RED, LOW);
-	digitalWrite(LED_GREEN, LOW);
-	digitalWrite(LED_BLUE, LOW);
-	printf("RESET ALL LEDs\r\n");	
-    	digitalWrite (HUMIDIFIER, LOW) ; 
-    	digitalWrite (DEHUMIDIFIER, LOW) ;
-    	
-	printf("PULSE RED LED\r\n");	
-	blink_LED(LED_RED, 2, 100);
-	delay (100);
-	
-	printf("PULSE GREEN LED\r\n");	
-	blink_LED(LED_GREEN, 2, 100);
-	delay (100);
-	
-	printf("PULSE BLUE LED\r\n");	
-	blink_LED(LED_BLUE, 2, 100);
-	delay (100);
 	
 	for (;;) { 
-
-		// reset them all to off
-		digitalWrite(LED_RED, LOW);
-		digitalWrite(LED_GREEN, LOW);
-		digitalWrite(LED_BLUE, LOW);
-		printf("\tRESET ALL LEDs\r\n");	
-
-		if (LED_RED_STATE == 1) {
-			blink_LED(LED_RED, 1, 10000);
-			printf("\tLED_RED_STATE\r\n");	
-		}
-
-		if (LED_GREEN_STATE == 1) {
-			blink_LED(LED_GREEN, 1, 10000);
-			printf("\tLED_GREEN_STATE\r\n");	
-		}
-
-		if (LED_BLUE_STATE == 1) {
-			blink_LED(LED_BLUE, 1, 10000);
-			printf("\tLED_BLUE_STATE\r\n");	
-		}
 
 		delay(READING_INTERVAL);
 	}
@@ -196,38 +154,44 @@ int  main(void)
     const char *message2 = "udp_control";
 	int  iret1;
 
+	// Setup GPIO's, Timers, Interrupts, etc
+	wiringPiSetup() ;
+
+//	TempInit(TempPin);
+	BeepInit(BeepPin, 0);
+	RangeInit(EchoPin, TriggerPin, 0);
+	
 	iret1 = pthread_mutex_init(&lock, NULL); 
-     	if(iret1)
+    if(iret1)
 	{
-        	fprintf(stderr,"Error - mutex init failed, return code: %d\n",iret1);
+        BeepMorse(5, "Mutex Fail");
+        fprintf(stderr,"Error - mutex init failed, return code: %d\n",iret1);
 		exit(EXIT_FAILURE);
 	}
 
-     	iret1 = pthread_create( &sumpControl, NULL, sump_control, (void*) message1);
-     	if(iret1)
-     	{
-        	fprintf(stderr,"Error - pthread_create() return code: %d\n",iret1);
-        	exit(EXIT_FAILURE);
-     	}
+    iret1 = pthread_create( &sumpControl, NULL, sump_control, (void*) message1);
+    if(iret1)
+    {
+        fprintf(stderr,"Error - pthread_create() return code: %d\n",iret1);
+        BeepMorse(5, "Sump Thread Create Fail");
+        exit(EXIT_FAILURE);
+    }
 
 
-     	iret1 = pthread_create( &udpControl, NULL, udp_control, (void*) message2);
-     	if(iret1)
-     	{
-        	fprintf(stderr,"Error - pthread_create() return code: %d\n",iret1);
-        	exit(EXIT_FAILURE);
-     	}
-
-#error Need to update additional calls (currently using sample)
-    // Monitor Business Logic
-	monitorHumidity();
+    iret1 = pthread_create( &udpControl, NULL, udp_control, (void*) message2);
+    if(iret1)
+    {
+        fprintf(stderr,"Error - pthread_create() return code: %d\n",iret1);
+        BeepMorse(5, "UDP Thread Create Fail");
+        exit(EXIT_FAILURE);
+    }
 
 	// Exit	
 	pthread_join(sumpControl, NULL);
 	pthread_join(udpControl, NULL);
 	pthread_mutex_destroy(&lock);
 
-	printf("END\r\n");	
+	BeepMorse(5, "OK");
 	return 0;
 }
 
