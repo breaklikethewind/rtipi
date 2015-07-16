@@ -61,7 +61,7 @@ typedef struct
 {
 	float humidity_pct;
 	float temp_f;
-	unsigned int distance_in;
+	float distance_in;
 	bool beeper;
 } status_t;
 
