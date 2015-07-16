@@ -39,27 +39,30 @@
 
 #include "beep.h"
 #include "range.h"
+#include "dht_read.h"
 
 #define BeepPin 2 // Raspberry pi gpio27
-#define TempPin 5 // GPIO 24
 #define EchoPin 7 // Raspberry pi gpio4
 #define TriggerPin 0 // Raspberry pi gpio 17
+#define DHTPin 5 // GPIO 24
+
+#define SAMPLE_PERIOD 900 // Seconds
 
 typedef struct
 {
-    unsigned int humidity_alarm_setpoint;
-    unsigned int temp_alarm_setpoint;
-    unsigned int distance_alarm_setpoint;
-    bool beeper_state;
-    char beeper_message[128];
+	unsigned int humidity_alarm_setpoint;
+	unsigned int temp_alarm_setpoint;
+	unsigned int distance_alarm_setpoint;
+	bool beeper_state;
+	char beeper_message[128];
 } control_t;
 
 typedef struct
 {
-    unsigned int humidity;
-    unsigned int temp;
-    unsigned int distance;
-    bool beeper;
+	float humidity_pct;
+	float temp_f;
+	unsigned int distance_in;
+	bool beeper;
 } status_t;
 
 control_t control;
@@ -69,89 +72,95 @@ void *sump_control( void *ptr );
 void *udp_control( void *ptr );
 bool sump_exit = false;
 
-void *udp_control( void *ptr ) {
+void *udp_control( void *ptr ) 
+{
+	int sockfd,n;
+	struct sockaddr_in servaddr,cliaddr;
+	socklen_t len;
+	char mesg[1000];
+	char sendmesg[1000] = {0};
 
-   int sockfd,n;
-   struct sockaddr_in servaddr,cliaddr;
-   socklen_t len;
-   char mesg[1000];
-   char sendmesg[1000] = {0};
+	sockfd=socket(AF_INET,SOCK_DGRAM,0);
 
-   sockfd=socket(AF_INET,SOCK_DGRAM,0);
+	bzero(&servaddr,sizeof(servaddr));
+	servaddr.sin_family = AF_INET;
+	servaddr.sin_addr.s_addr=htonl(INADDR_ANY);
+	servaddr.sin_port=htons(32000);
+	bind(sockfd,(struct sockaddr *)&servaddr,sizeof(servaddr));
 
-   bzero(&servaddr,sizeof(servaddr));
-   servaddr.sin_family = AF_INET;
-   servaddr.sin_addr.s_addr=htonl(INADDR_ANY);
-   servaddr.sin_port=htons(32000);
-   bind(sockfd,(struct sockaddr *)&servaddr,sizeof(servaddr));
-
-   printf("THREAD UDP CONTROL\r\n");
+	printf("THREAD UDP CONTROL\r\n");
 #error need to create/handle UDP messages
-   for (;;)
-   {
-        len = sizeof(cliaddr);
-        n = recvfrom(sockfd,mesg,1000,0,(struct sockaddr *)&cliaddr,&len);
-        printf("-------------------------------------------------------\n");
-        mesg[n] = 0;
-        printf("Received the following:\n");
-        printf("%s",mesg);
-        printf("-------------------------------------------------------\n");
+	for (;;)
+	{
+		len = sizeof(cliaddr);
+		n = recvfrom(sockfd,mesg,1000,0,(struct sockaddr *)&cliaddr,&len);
+		printf("-------------------------------------------------------\n");
+		mesg[n] = 0;
+		printf("Received the following:\n");
+		printf("%s",mesg);
+		printf("-------------------------------------------------------\n");
 
-        if (strncmp(mesg, "GETHUMIDITY", 11) == 0) 
-        {
-            pthread_mutex_lock(&lock);
-            sprintf(sendmesg, "HUMIDITY=%d\r\n", (int)status.humidity);
-            pthread_mutex_unlock(&lock);
-            sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-        }
-        else if (strncmp(mesg, "GETTEMP", 7) == 0) 
-        {
-            pthread_mutex_lock(&lock);
-            sprintf(sendmesg, "TEMP=%d\r\n", status.temp);
-            pthread_mutex_unlock(&lock);
-            sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-        }
-        else if (strncmp(mesg, "GETDISTANCE", 11) == 0) 
-        {
-            pthread_mutex_lock(&lock);
-            sprintf(sendmesg, "DISTANCE=%d\r\n", status.distance);
-            pthread_mutex_unlock(&lock);
-            sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-        }
-        else if (strncmp(mesg, "GETBEEPER", 15) == 0) 
-        {
-            pthread_mutex_lock(&lock);
-            sprintf(sendmesg, "BEEPER=%s\r\n", (status.beeper) ? "on":"off");
-            pthread_mutex_unlock(&lock);
-            sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-        }
-        else if (strncmp(mesg, "SHUTDOWN", 8) == 0)
-        {
-            pthread_mutex_lock(&lock);
-            sprintf(sendmesg, "SHUTDOWN=true\r\n");
-            pthread_mutex_unlock(&lock);
-            sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-            sump_shutdown = true;          
-        }
-        else 
-        {
-            sprintf(sendmesg, "INVALID COMMAND\r\n");
-            sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-        }
-    }
+		if (strncmp(mesg, "GETHUMIDITY", 11) == 0) 
+		{
+			pthread_mutex_lock(&lock);
+			sprintf(sendmesg, "HUMIDITY=%.1f\r\n", status.humidity_pct);
+			pthread_mutex_unlock(&lock);
+			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+		}
+		else if (strncmp(mesg, "GETTEMP", 7) == 0) 
+		{
+			pthread_mutex_lock(&lock);
+			sprintf(sendmesg, "TEMP=%.1f\r\n", status.temp_f);
+			pthread_mutex_unlock(&lock);
+			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+		}
+		else if (strncmp(mesg, "GETDISTANCE", 11) == 0) 
+		{
+			pthread_mutex_lock(&lock);
+			sprintf(sendmesg, "DISTANCE=%d\r\n", status.distance_in);
+			pthread_mutex_unlock(&lock);
+			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+		}
+		else if (strncmp(mesg, "GETBEEPER", 15) == 0) 
+		{
+			pthread_mutex_lock(&lock);
+			sprintf(sendmesg, "BEEPER=%s\r\n", (status.beeper) ? "on":"off");
+			pthread_mutex_unlock(&lock);
+			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+		}
+		else if (strncmp(mesg, "SHUTDOWN", 8) == 0)
+		{
+			pthread_mutex_lock(&lock);
+			sprintf(sendmesg, "SHUTDOWN=true\r\n");
+			pthread_mutex_unlock(&lock);
+			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+			sump_shutdown = true;          
+		}
+		else 
+		{
+			sprintf(sendmesg, "INVALID COMMAND\r\n");
+			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+		}
+	}
 }
 
 void *sump_control( void *ptr ) 
 {
 #error need to write sump control (currently using sample)
+	float temp_c;
 	
-	for (;;) { 
-        
-        pthread_mutex_lock(&lock);
-        status.distance = RangeMeasure(5);
-        pthread_mutex_unlock(&lock);
+	
+	for (;;) 
+	{ 
+		pthread_mutex_lock(&lock);
+		status.distance_in = RangeMeasure(5);
+		pthread_mutex_unlock(&lock);
+			
+		pthread_mutex_lock(&lock);
+		dht_read_val(&status.temp_f, &temp_c, &status.humidity_pct)
+		pthread_mutex_unlock(&lock);
        
-		delay(READING_INTERVAL);
+		delay(SAMPLE_PERIOD);
 	}
 }
 
@@ -186,46 +195,45 @@ void printhelp(void)
 
 int  main(void)
 {
-    pthread_t sumpControl;
-    pthread_t udpControl;
-    const char *message1 = "sump_control";
-    const char *message2 = "udp_control";
+	pthread_t sumpControl;
+	pthread_t udpControl;
+	const char *message1 = "sump_control";
+	const char *message2 = "udp_control";
 	int  iret1;
 
 	// Setup GPIO's, Timers, Interrupts, etc
 	wiringPiSetup() ;
 
-//	TempInit(TempPin);
 	BeepInit(BeepPin, 0);
 	RangeInit(EchoPin, TriggerPin, 0);
+	dht_init(DHTPin);
 	
 	iret1 = pthread_mutex_init(&lock, NULL); 
-    if(iret1)
+	if(iret1)
 	{
-        BeepMorse(5, "Mutex Fail");
-        fprintf(stderr,"Error - mutex init failed, return code: %d\n",iret1);
+		BeepMorse(5, "Mutex Fail");
+		fprintf(stderr,"Error - mutex init failed, return code: %d\n",iret1);
 		exit(EXIT_FAILURE);
 	}
 
-    iret1 = pthread_create( &sumpControl, NULL, sump_control, (void*) message1);
-    if(iret1)
-    {
-        fprintf(stderr,"Error - pthread_create() return code: %d\n",iret1);
-        BeepMorse(5, "Sump Thread Create Fail");
-        exit(EXIT_FAILURE);
-    }
+	iret1 = pthread_create( &sumpControl, NULL, sump_control, (void*) message1);
+	if(iret1)
+	{
+		fprintf(stderr,"Error - pthread_create() return code: %d\n",iret1);
+		BeepMorse(5, "Sump Thread Create Fail");
+		exit(EXIT_FAILURE);
+	}
 
+	iret1 = pthread_create( &udpControl, NULL, udp_control, (void*) message2);
+	if(iret1)
+	{
+		fprintf(stderr,"Error - pthread_create() return code: %d\n",iret1);
+		BeepMorse(5, "UDP Thread Create Fail");
+		exit(EXIT_FAILURE);
+	}
 
-    iret1 = pthread_create( &udpControl, NULL, udp_control, (void*) message2);
-    if(iret1)
-    {
-        fprintf(stderr,"Error - pthread_create() return code: %d\n",iret1);
-        BeepMorse(5, "UDP Thread Create Fail");
-        exit(EXIT_FAILURE);
-    }
+	while (!sump_exit);
 
-    while (!sump_exit);
-    
 	// Exit	
 	pthread_join(sumpControl, NULL);
 	pthread_join(udpControl, NULL);
