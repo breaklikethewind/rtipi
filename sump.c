@@ -27,8 +27,10 @@
 #include <string.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <unistd.h>
 #include <termios.h>
+#include <pthread.h>
 #include <fcntl.h>
 #include <wiringPi.h>
 #include <sys/mman.h>
@@ -89,7 +91,7 @@ void *udp_control( void *ptr )
 	bind(sockfd,(struct sockaddr *)&servaddr,sizeof(servaddr));
 
 	printf("THREAD UDP CONTROL\r\n");
-#error need to create/handle UDP messages
+
 	for (;;)
 	{
 		len = sizeof(cliaddr);
@@ -117,7 +119,7 @@ void *udp_control( void *ptr )
 		else if (strncmp(mesg, "GETDISTANCE", 11) == 0) 
 		{
 			pthread_mutex_lock(&lock);
-			sprintf(sendmesg, "DISTANCE=%d\r\n", status.distance_in);
+			sprintf(sendmesg, "DISTANCE=%f\r\n", status.distance_in);
 			pthread_mutex_unlock(&lock);
 			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
 		}
@@ -134,7 +136,7 @@ void *udp_control( void *ptr )
 			sprintf(sendmesg, "SHUTDOWN=true\r\n");
 			pthread_mutex_unlock(&lock);
 			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-			sump_shutdown = true;          
+			sump_exit = true;          
 		}
 		else 
 		{
@@ -146,7 +148,6 @@ void *udp_control( void *ptr )
 
 void *sump_control( void *ptr ) 
 {
-#error need to write sump control (currently using sample)
 	float temp_c;
 	
 	
@@ -157,7 +158,7 @@ void *sump_control( void *ptr )
 		pthread_mutex_unlock(&lock);
 			
 		pthread_mutex_lock(&lock);
-		dht_read_val(&status.temp_f, &temp_c, &status.humidity_pct)
+		dht_read_val(&status.temp_f, &temp_c, &status.humidity_pct);
 		pthread_mutex_unlock(&lock);
        
 		delay(SAMPLE_PERIOD);
@@ -166,7 +167,6 @@ void *sump_control( void *ptr )
 
 void printhelp(void)
 {
-#error need to update for sump.c (currently using sample)
 	printf("\n");
 	printf("This utility reads the HC-S04 transducer device. The distance\n");
 	printf("in inches is provided in the return value. Negative return values\n");
@@ -243,7 +243,6 @@ int  main(void)
 	return 0;
 }
 
-#error Remove refrence code
 #if 0
 
 // The following is just for refrence. Remove when no longer needed
