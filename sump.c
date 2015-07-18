@@ -36,6 +36,7 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <arpa/inet.h>
+#include <signal.h>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -63,6 +64,10 @@ typedef struct
 	char beeper_message[128];
 	int push_period;
 	int sensor_period;
+	int sump_exit;
+	int paired;
+	int sequencenumber;
+	int manualscan;
 } control_t;
 
 typedef struct
@@ -73,15 +78,15 @@ typedef struct
 	bool beeper;
 } status_t;
 
-struct sockaddr_in servaddr,cliaddr;
+struct sockaddr_in servaddr, cliaddr, alladdr;
 control_t control;
 status_t status;
 pthread_mutex_t lock; // sync between UDP thread and main
 void *thread_data_push( void *ptr );
 void *thread_request_handler( void *ptr );
 void *thread_sensor_sample( void *ptr );
-bool sump_exit = false;
-bool paired = false;
+void measure(void);
+void data_push(void);
 
 void *thread_request_handler( void *ptr ) 
 {
@@ -97,15 +102,13 @@ void *thread_request_handler( void *ptr )
 	servaddr.sin_port=htons(32000);
 	bind(sockfd,(struct sockaddr *)&servaddr,sizeof(servaddr));
 
-	while (!sump_exit)
+	while (!control.sump_exit)
 	{
 		len = sizeof(cliaddr);
 		n = recvfrom(sockfd, mesg, 1000, 0, (struct sockaddr *)&cliaddr, &len);
 		printf("-------------------------------------------------------\n");
 		mesg[n] = 0;
-		printf("Received the following:\n");
-		printf("%s",mesg);
-		printf("-------------------------------------------------------\n");
+		printf("Received: %s\r\n",mesg);
 
 		if (strncmp(mesg, "GETHUMIDITY", 11) == 0) 
 		{
@@ -141,7 +144,7 @@ void *thread_request_handler( void *ptr )
 			sprintf(sendmesg, "SHUTDOWN=true\r\n");
 			pthread_mutex_unlock(&lock);
 			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-			sump_exit = true;          
+			control.sump_exit = 1;          
 		}
 		else if (strncmp(mesg, "SETPUSHPERIOD", 13) == 0)
 		{
@@ -152,11 +155,6 @@ void *thread_request_handler( void *ptr )
 				sprintf(sendmesg, "PUSHPERIOD=%u\r\n", control.push_period);
 				pthread_mutex_unlock(&lock);
 				sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-				if (!paired)
-				{
-					printf("Paired!, Push Period Set: %u\r\n", control.push_period);
-					paired = true;
-				}
 			}
 		}
 		else if (strncmp(mesg, "SETSENSORPERIOD", 15) == 0)
@@ -170,11 +168,49 @@ void *thread_request_handler( void *ptr )
 				sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
 			}
 		}
+		else if (strncmp(mesg, "SETSUMPPAIR", 11) == 0)
+		{
+			pthread_mutex_lock(&lock);
+			if (mesg[11] == '=')
+			{
+				control.paired = atol(mesg + 12);
+				sprintf(sendmesg, "SUMPPAIR=%u\r\n", control.paired);
+				pthread_mutex_unlock(&lock);
+				sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+			}
+		}
+		else if (strncmp(mesg, "SETSUMPSCAN", 11) == 0)
+		{
+			pthread_mutex_lock(&lock);
+			if (mesg[11] == '=')
+			{
+				control.paired = atol(mesg + 12);
+				sprintf(sendmesg, "SETSUMPSCAN=%u\r\n", control.manualscan);
+				pthread_mutex_unlock(&lock);
+				sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+				measure();
+				data_push();
+			}
+		}
 		else 
 		{
 			sprintf(sendmesg, "INVALID COMMAND\r\n");
 			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
 		}
+		printf("Responded: %s", sendmesg);
+		printf("-------------------------------------------------------\n");
+	}
+	
+	return NULL;
+}
+
+void *thread_sensor_sample( void *ptr ) 
+{
+	
+	while (!control.sump_exit)
+	{
+		measure();
+		sleep(control.sensor_period);
 	}
 	
 	return NULL;
@@ -186,44 +222,18 @@ void *thread_data_push( void *ptr )
 	char sendmesg[1000] = {0};
 		
 	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-	inet_pton(AF_INET, HOST_IP, (void*)&cliaddr.sin_addr.s_addr);
+	alladdr.sin_addr.s_addr=htonl(INADDR_BROADCAST);
 	
-	while (!sump_exit)
+	while (!control.sump_exit)
 	{
-		if (!paired)
+		if (!control.paired)
 		{
-			sprintf(sendmesg, "PUSHPERIOD=0\r\n");
-			sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
-			printf("Sending 'PUSHPERIOD=0' to %s, to establish pairing\r\n", HOST_IP);
+			sprintf(sendmesg, "SUMPPAIR=0\r\n");
+			sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&alladdr, sizeof(alladdr));
+			printf("Broadcasting 'SUMPPAIR=0', to establish pairing\r\n");
 		}
 		else
-		{
-			printf("Pushing data...\r\n");
-			
-			// Send sensor data to host
-			pthread_mutex_lock(&lock);
-			sprintf(sendmesg, "HUMIDITY=%.1f\r\n", status.humidity_pct);
-			pthread_mutex_unlock(&lock);
-			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-
-			pthread_mutex_lock(&lock);
-			sprintf(sendmesg, "TEMP=%.1f\r\n", status.temp_f);
-			pthread_mutex_unlock(&lock);
-			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-
-			pthread_mutex_lock(&lock);
-			sprintf(sendmesg, "DISTANCE=%.1f\r\n", status.distance_in);
-			pthread_mutex_unlock(&lock);
-			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-
-			pthread_mutex_lock(&lock);
-			sprintf(sendmesg, "BEEPER=%s\r\n", (status.beeper) ? "on":"off");
-			pthread_mutex_unlock(&lock);
-			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-
-			sprintf(sendmesg, "HEARTBEAT=true\r\n");
-			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-		}
+			data_push();
 			
 		sleep(control.push_period);
 	}
@@ -231,25 +241,77 @@ void *thread_data_push( void *ptr )
 	return NULL;
 }
 
-void *thread_sensor_sample( void *ptr ) 
+void measure( void )
 {
 	float temp_c;
+
+	// Fetch sensor data
+	pthread_mutex_lock(&lock);
+	status.distance_in = RangeMeasure(5);
+	pthread_mutex_unlock(&lock);
+		
+	pthread_mutex_lock(&lock);
+	dht_read_val(&status.temp_f, &temp_c, &status.humidity_pct);
+	pthread_mutex_unlock(&lock);
+}
+
+void data_push( void )
+{
+	int sockfd;
+	char sendmesg[1000] = {0};
+
+	printf("Pushing data...\r\n");
 	
-	while (!sump_exit)
+	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+	// Send sensor data to host
+	pthread_mutex_lock(&lock);
+	sprintf(sendmesg, "HUMIDITY=%.1f\r\n", status.humidity_pct);
+	pthread_mutex_unlock(&lock);
+	sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+	printf("%s", sendmesg);
+
+	pthread_mutex_lock(&lock);
+	sprintf(sendmesg, "TEMP=%.1f\r\n", status.temp_f);
+	pthread_mutex_unlock(&lock);
+	sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+	printf("%s", sendmesg);
+
+	pthread_mutex_lock(&lock);
+	sprintf(sendmesg, "DISTANCE=%.1f\r\n", status.distance_in);
+	pthread_mutex_unlock(&lock);
+	sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+	printf("%s", sendmesg);
+
+	pthread_mutex_lock(&lock);
+	sprintf(sendmesg, "BEEPER=%s\r\n", (status.beeper) ? "on":"off");
+	pthread_mutex_unlock(&lock);
+	sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+	printf("%s", sendmesg);
+
+	sprintf(sendmesg, "SEQUENCENUMBER=%u\r\n", control.sequencenumber);
+	sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+	control.sequencenumber++;
+	printf("%s", sendmesg);
+	
+	printf("\r\n");
+}
+
+void sump_unpair( void ) 
+{
+	int sockfd;
+	char sendmesg[1000] = {0};
+		
+	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+	
+	if (!control.paired)
 	{
-		// Fetch sensor data
-		pthread_mutex_lock(&lock);
-		status.distance_in = RangeMeasure(5);
-		pthread_mutex_unlock(&lock);
-			
-		pthread_mutex_lock(&lock);
-		dht_read_val(&status.temp_f, &temp_c, &status.humidity_pct);
-		pthread_mutex_unlock(&lock);
-       
-		sleep(control.sensor_period);
+		sprintf(sendmesg, "SUMPPAIR=0\r\n");
+		sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
+		printf("Sending 'SUMPPAIR=0' to %s, to unpair\r\n", HOST_IP);
 	}
 	
-	return NULL;
+	return;
 }
 
 /*
@@ -271,6 +333,8 @@ int  main(void)
 	bzero(&servaddr,sizeof(servaddr));
 	control.push_period = DEFAULT_PUSH_PERIOD;
 	control.sensor_period = DEFAULT_SENSOR_PERIOD;
+	control.sump_exit = 0;
+	control.paired = 0;
 
 	// Setup GPIO's, Timers, Interrupts, etc
 	wiringPiSetup() ;
@@ -317,15 +381,25 @@ int  main(void)
 	else
 		printf("Launching thread sensor_sample\r\n");
 
-	while (!sump_exit) sleep(0);
-
+	BeepMorse(5, "OK");
+	
+	while (!control.sump_exit) 
+		if (getchar() == ' ') 
+			control.sump_exit = 1; 
+		else 
+			sleep(0);
+	
+	printf("Sump Exit Set...\r\n");
+	
 	// Exit	
 	pthread_join(data_push, NULL);
 	pthread_join(request_handler, NULL);
 	pthread_join(sensor_sample, NULL);
 	pthread_mutex_destroy(&lock);
 
-	BeepMorse(5, "OK");
+	sump_unpair();
+
+	BeepMorse(5, "Exit");
 	return 0;
 }
 
