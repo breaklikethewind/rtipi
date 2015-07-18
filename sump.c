@@ -57,6 +57,7 @@ typedef struct
 	unsigned int distance_alarm_setpoint;
 	bool beeper_state;
 	char beeper_message[128];
+	int pollrate = SAMPLE_PERIOD;
 } control_t;
 
 typedef struct
@@ -67,6 +68,7 @@ typedef struct
 	bool beeper;
 } status_t;
 
+struct sockaddr_in servaddr,cliaddr;
 control_t control;
 status_t status;
 pthread_mutex_t lock; // sync between UDP thread and main
@@ -77,14 +79,12 @@ bool sump_exit = false;
 void *udp_control( void *ptr ) 
 {
 	int sockfd,n;
-	struct sockaddr_in servaddr,cliaddr;
 	socklen_t len;
 	char mesg[1000];
 	char sendmesg[1000] = {0};
 
-	sockfd=socket(AF_INET,SOCK_DGRAM,0);
+	sockfd=socket(AF_INET, SOCK_DGRAM, 0);
 
-	bzero(&servaddr,sizeof(servaddr));
 	servaddr.sin_family = AF_INET;
 	servaddr.sin_addr.s_addr=htonl(INADDR_ANY);
 	servaddr.sin_port=htons(32000);
@@ -95,7 +95,7 @@ void *udp_control( void *ptr )
 	for (;;)
 	{
 		len = sizeof(cliaddr);
-		n = recvfrom(sockfd,mesg,1000,0,(struct sockaddr *)&cliaddr,&len);
+		n = recvfrom(sockfd, mesg, 1000, 0, (struct sockaddr *)&cliaddr, &len);
 		printf("-------------------------------------------------------\n");
 		mesg[n] = 0;
 		printf("Received the following:\n");
@@ -119,7 +119,7 @@ void *udp_control( void *ptr )
 		else if (strncmp(mesg, "GETDISTANCE", 11) == 0) 
 		{
 			pthread_mutex_lock(&lock);
-			sprintf(sendmesg, "DISTANCE=%f\r\n", status.distance_in);
+			sprintf(sendmesg, "DISTANCE=%.1f\r\n", status.distance_in);
 			pthread_mutex_unlock(&lock);
 			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
 		}
@@ -138,6 +138,17 @@ void *udp_control( void *ptr )
 			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
 			sump_exit = true;          
 		}
+		else if (strncmp(mesg, "SETPOLLRATE", 11) == 0)
+		{
+			pthread_mutex_lock(&lock);
+			if (mesg[11] = '=')
+			{
+				pollrate = atol(mesg + 12);
+				sprintf(sendmesg, "SETPOLLRATE=%u\r\n", control.pollrate);
+				pthread_mutex_unlock(&lock);
+				sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+			}
+		}
 		else 
 		{
 			sprintf(sendmesg, "INVALID COMMAND\r\n");
@@ -150,41 +161,53 @@ void *sump_control( void *ptr )
 {
 	float temp_c;
 	
+	inet_pton(AF_INET, "192.168.1.101", (void*)&cliaddr.sin_addr.s_addr);
 	
 	for (;;) 
-	{ 
-		pthread_mutex_lock(&lock);
-		status.distance_in = RangeMeasure(5);
-		pthread_mutex_unlock(&lock);
-			
-		pthread_mutex_lock(&lock);
-		dht_read_val(&status.temp_f, &temp_c, &status.humidity_pct);
-		pthread_mutex_unlock(&lock);
-       
-		delay(SAMPLE_PERIOD);
-	}
-}
+	{
+		if (pollrate == 0)
+		{
+			sprintf(sendmesg, "GETPOLLRATE\r\n");
+			sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
+		}
+		else
+		{
+			// Fetch sensor data
+			pthread_mutex_lock(&lock);
+			status.distance_in = RangeMeasure(5);
+			pthread_mutex_unlock(&lock);
+				
+			pthread_mutex_lock(&lock);
+			dht_read_val(&status.temp_f, &temp_c, &status.humidity_pct);
+			pthread_mutex_unlock(&lock);
+	       
+			// Send sensor data to host
+			pthread_mutex_lock(&lock);
+			sprintf(sendmesg, "HUMIDITY=%.1f\r\n", status.humidity_pct);
+			pthread_mutex_unlock(&lock);
+			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
 
-void printhelp(void)
-{
-	printf("\n");
-	printf("This utility reads the HC-S04 transducer device. The distance\n");
-	printf("in inches is provided in the return value. Negative return values\n");
-	printf("indicate an error.\n");
-	printf("\n");
-	printf("Options:\n");
-	printf(" -d debug the sensor by repeatedly read & display distance\n");
-	printf(" -h This help screen\n");
-	printf(" -a n Average n samples & provide the average result\n");
-	printf("\n");
-	printf("Return values: \n");
-	printf(" > 0: Distance measured in inches\n");
-	printf("  -1: The echo pin on the HC-S04 did not have a rising edge\n");
-	printf("  -2: The echo pin on the HC-S04 did not have a falling edge. This\n");
-	printf("      can be due to a distance too far to measure, a soft target, the\n");
-	printf("      target is too small, or the target is not perpandicular to the\n");
-	printf("      HC-S04\n");
-	printf("\n");
+			pthread_mutex_lock(&lock);
+			sprintf(sendmesg, "TEMP=%.1f\r\n", status.temp_f);
+			pthread_mutex_unlock(&lock);
+			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+
+			pthread_mutex_lock(&lock);
+			sprintf(sendmesg, "DISTANCE=%.1f\r\n", status.distance_in);
+			pthread_mutex_unlock(&lock);
+			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+
+			pthread_mutex_lock(&lock);
+			sprintf(sendmesg, "BEEPER=%s\r\n", (status.beeper) ? "on":"off");
+			pthread_mutex_unlock(&lock);
+			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+
+			sprintf(sendmesg, "HEARTBEAT=true\r\n");
+			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+			
+			delay(pollrate);
+		}
+	}
 }
 
 /*
@@ -201,6 +224,8 @@ int  main(void)
 	const char *message2 = "udp_control";
 	int  iret1;
 
+	bzero(&servaddr,sizeof(servaddr));
+
 	// Setup GPIO's, Timers, Interrupts, etc
 	wiringPiSetup() ;
 
@@ -208,6 +233,8 @@ int  main(void)
 	RangeInit(EchoPin, TriggerPin, 0);
 	dht_init(DHTPin);
 	
+	control.pollrate = 0;
+
 	iret1 = pthread_mutex_init(&lock, NULL); 
 	if(iret1)
 	{
@@ -243,46 +270,3 @@ int  main(void)
 	return 0;
 }
 
-#if 0
-
-// The following is just for refrence. Remove when no longer needed
-
-int main (int argc,char *argv[])
-{
-	int err = 0;
-	int opt = 0;
-	time_t t;
-
-	while ((opt = getopt(argc, argv, "h::")) != -1) 
-	{
-		switch(opt) 
-		{
-			case 'h':
-				// hoption = optarg;
-				printhelp();
-				break;
-			case '?':
-				// if (optopt == 'd') 
-				//	printf("\nMissing mandatory input option");
-				// else if (optopt == 'h')
-				//	printf("\nMissing mandatory output option");
-				// else
-				//	printf("\nInvalid option received");
-				printf("Use 'morse -h' for usage information\n");
-				break;
-		}
-	}
-	
-	// Setup GPIO's, Timers, Interrupts, etc
-	wiringPiSetup() ;
-
-//	TempInit(TempPin);
-	BeepInit(BeepPin, 0);
-	RangeInit(EchoPin, TriggerPin, 0);
-	
-	BeepMorse(5, "Hello World");
-	printf("Distance: %.02f\n", RangeMeasure(5));
-	
-	return err;
-}
-#endif
