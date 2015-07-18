@@ -35,6 +35,7 @@
 #include <wiringPi.h>
 #include <sys/mman.h>
 #include <time.h>
+#include <arpa/inet.h>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -48,7 +49,10 @@
 #define TriggerPin 0 // Raspberry pi gpio 17
 #define DHTPin 5 // GPIO 24
 
-#define SAMPLE_PERIOD 900 // Seconds
+#define HOST_IP "192.168.1.101"
+
+#define DEFAULT_PUSH_PERIOD 30 // Seconds
+#define DEFAULT_SENSOR_PERIOD 60 // Seconds
 
 typedef struct
 {
@@ -57,7 +61,8 @@ typedef struct
 	unsigned int distance_alarm_setpoint;
 	bool beeper_state;
 	char beeper_message[128];
-	int pollrate = SAMPLE_PERIOD;
+	int push_period;
+	int sensor_period;
 } control_t;
 
 typedef struct
@@ -72,13 +77,15 @@ struct sockaddr_in servaddr,cliaddr;
 control_t control;
 status_t status;
 pthread_mutex_t lock; // sync between UDP thread and main
-void *sump_control( void *ptr );
-void *udp_control( void *ptr );
+void *thread_data_push( void *ptr );
+void *thread_request_handler( void *ptr );
+void *thread_sensor_sample( void *ptr );
 bool sump_exit = false;
+bool paired = false;
 
-void *udp_control( void *ptr ) 
+void *thread_request_handler( void *ptr ) 
 {
-	int sockfd,n;
+	int sockfd, n;
 	socklen_t len;
 	char mesg[1000];
 	char sendmesg[1000] = {0};
@@ -90,9 +97,7 @@ void *udp_control( void *ptr )
 	servaddr.sin_port=htons(32000);
 	bind(sockfd,(struct sockaddr *)&servaddr,sizeof(servaddr));
 
-	printf("THREAD UDP CONTROL\r\n");
-
-	for (;;)
+	while (!sump_exit)
 	{
 		len = sizeof(cliaddr);
 		n = recvfrom(sockfd, mesg, 1000, 0, (struct sockaddr *)&cliaddr, &len);
@@ -138,13 +143,29 @@ void *udp_control( void *ptr )
 			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
 			sump_exit = true;          
 		}
-		else if (strncmp(mesg, "SETPOLLRATE", 11) == 0)
+		else if (strncmp(mesg, "SETPUSHPERIOD", 13) == 0)
 		{
 			pthread_mutex_lock(&lock);
-			if (mesg[11] = '=')
+			if (mesg[13] == '=')
 			{
-				pollrate = atol(mesg + 12);
-				sprintf(sendmesg, "SETPOLLRATE=%u\r\n", control.pollrate);
+				control.push_period = atol(mesg + 14);
+				sprintf(sendmesg, "PUSHPERIOD=%u\r\n", control.push_period);
+				pthread_mutex_unlock(&lock);
+				sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+				if (!paired)
+				{
+					printf("Paired!, Push Period Set: %u\r\n", control.push_period);
+					paired = true;
+				}
+			}
+		}
+		else if (strncmp(mesg, "SETSENSORPERIOD", 15) == 0)
+		{
+			pthread_mutex_lock(&lock);
+			if (mesg[15] == '=')
+			{
+				control.sensor_period = atol(mesg + 16);
+				sprintf(sendmesg, "SENSORPERIOD=%u\r\n", control.sensor_period);
 				pthread_mutex_unlock(&lock);
 				sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
 			}
@@ -155,32 +176,30 @@ void *udp_control( void *ptr )
 			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
 		}
 	}
+	
+	return NULL;
 }
 
-void *sump_control( void *ptr ) 
+void *thread_data_push( void *ptr ) 
 {
-	float temp_c;
+	int sockfd;
+	char sendmesg[1000] = {0};
+		
+	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+	inet_pton(AF_INET, HOST_IP, (void*)&cliaddr.sin_addr.s_addr);
 	
-	inet_pton(AF_INET, "192.168.1.101", (void*)&cliaddr.sin_addr.s_addr);
-	
-	for (;;) 
+	while (!sump_exit)
 	{
-		if (pollrate == 0)
+		if (!paired)
 		{
-			sprintf(sendmesg, "GETPOLLRATE\r\n");
+			sprintf(sendmesg, "PUSHPERIOD=0\r\n");
 			sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
+			printf("Sending 'PUSHPERIOD=0' to %s, to establish pairing\r\n", HOST_IP);
 		}
 		else
 		{
-			// Fetch sensor data
-			pthread_mutex_lock(&lock);
-			status.distance_in = RangeMeasure(5);
-			pthread_mutex_unlock(&lock);
-				
-			pthread_mutex_lock(&lock);
-			dht_read_val(&status.temp_f, &temp_c, &status.humidity_pct);
-			pthread_mutex_unlock(&lock);
-	       
+			printf("Pushing data...\r\n");
+			
 			// Send sensor data to host
 			pthread_mutex_lock(&lock);
 			sprintf(sendmesg, "HUMIDITY=%.1f\r\n", status.humidity_pct);
@@ -204,10 +223,33 @@ void *sump_control( void *ptr )
 
 			sprintf(sendmesg, "HEARTBEAT=true\r\n");
 			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-			
-			delay(pollrate);
 		}
+			
+		sleep(control.push_period);
 	}
+	
+	return NULL;
+}
+
+void *thread_sensor_sample( void *ptr ) 
+{
+	float temp_c;
+	
+	while (!sump_exit)
+	{
+		// Fetch sensor data
+		pthread_mutex_lock(&lock);
+		status.distance_in = RangeMeasure(5);
+		pthread_mutex_unlock(&lock);
+			
+		pthread_mutex_lock(&lock);
+		dht_read_val(&status.temp_f, &temp_c, &status.humidity_pct);
+		pthread_mutex_unlock(&lock);
+       
+		sleep(control.sensor_period);
+	}
+	
+	return NULL;
 }
 
 /*
@@ -218,13 +260,17 @@ void *sump_control( void *ptr )
 
 int  main(void)
 {
-	pthread_t sumpControl;
-	pthread_t udpControl;
-	const char *message1 = "sump_control";
-	const char *message2 = "udp_control";
+	pthread_t data_push;
+	pthread_t request_handler;
+	pthread_t sensor_sample;
+	const char *message1 = "thread_data_push";
+	const char *message2 = "thread_request_handler";
+	const char *message3 = "thread_sensor_sample";
 	int  iret1;
 
 	bzero(&servaddr,sizeof(servaddr));
+	control.push_period = DEFAULT_PUSH_PERIOD;
+	control.sensor_period = DEFAULT_SENSOR_PERIOD;
 
 	// Setup GPIO's, Timers, Interrupts, etc
 	wiringPiSetup() ;
@@ -233,8 +279,6 @@ int  main(void)
 	RangeInit(EchoPin, TriggerPin, 0);
 	dht_init(DHTPin);
 	
-	control.pollrate = 0;
-
 	iret1 = pthread_mutex_init(&lock, NULL); 
 	if(iret1)
 	{
@@ -243,27 +287,42 @@ int  main(void)
 		exit(EXIT_FAILURE);
 	}
 
-	iret1 = pthread_create( &sumpControl, NULL, sump_control, (void*) message1);
+	iret1 = pthread_create( &data_push, NULL, thread_data_push, (void*) message1);
 	if(iret1)
 	{
 		fprintf(stderr,"Error - pthread_create() return code: %d\n",iret1);
 		BeepMorse(5, "Sump Thread Create Fail");
 		exit(EXIT_FAILURE);
 	}
+	else
+		printf("Launching thread data_push\r\n");
 
-	iret1 = pthread_create( &udpControl, NULL, udp_control, (void*) message2);
+	iret1 = pthread_create( &request_handler, NULL, thread_request_handler, (void*) message2);
 	if(iret1)
 	{
 		fprintf(stderr,"Error - pthread_create() return code: %d\n",iret1);
 		BeepMorse(5, "UDP Thread Create Fail");
 		exit(EXIT_FAILURE);
 	}
+	else
+		printf("Launching thread request_handler\r\n");
 
-	while (!sump_exit);
+	iret1 = pthread_create( &sensor_sample, NULL, thread_sensor_sample, (void*) message3);
+	if(iret1)
+	{
+		fprintf(stderr,"Error - pthread_create() return code: %d\n",iret1);
+		BeepMorse(5, "thread_sensor_sample Thread Create Fail");
+		exit(EXIT_FAILURE);
+	}
+	else
+		printf("Launching thread sensor_sample\r\n");
+
+	while (!sump_exit) sleep(0);
 
 	// Exit	
-	pthread_join(sumpControl, NULL);
-	pthread_join(udpControl, NULL);
+	pthread_join(data_push, NULL);
+	pthread_join(request_handler, NULL);
+	pthread_join(sensor_sample, NULL);
 	pthread_mutex_destroy(&lock);
 
 	BeepMorse(5, "OK");
