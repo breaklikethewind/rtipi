@@ -78,6 +78,12 @@ typedef struct
 	bool beeper;
 } status_t;
 
+commandlist commands = { \
+{ "GETHUMIDITY", "HUMIDITY", NULL, TYPE_FLOAT, &status.humidity_pct}, \
+{ "GETTEMP",     "TEMP",     NULL, TYPE_FLOAT, &status.temp_f}, \
+{ NULL,          NULL,       NULL, 0,            NULL} \
+};
+
 struct sockaddr_in servaddr, cliaddr, alladdr;
 control_t control;
 status_t status;
@@ -141,7 +147,7 @@ void *thread_request_handler( void *ptr )
 		else if (strncmp(mesg, "SHUTDOWN", 8) == 0)
 		{
 			pthread_mutex_lock(&lock);
-			sprintf(sendmesg, "SHUTDOWN=true\r\n");
+			sprintf(sendmesg, "SHUTDOWN=1\r\n");
 			pthread_mutex_unlock(&lock);
 			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
 			control.sump_exit = 1;          
