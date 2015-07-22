@@ -45,7 +45,6 @@ typedef struct
 	unsigned int distance_alarm_setpoint;
 	bool beeper_state;
 	char beeper_message[128];
-	int push_period;
 	int sensor_period;
 	int manualscan;
 } control_t;
@@ -62,7 +61,8 @@ typedef struct transport
 {
 	int paired;
 	int sequencenumber;
-	int sump_exit;
+	int exit;
+	int push_period;
 } transport_t;    
 
 commandlist_t commands = { \
@@ -80,6 +80,7 @@ pushlist_t pushlist = { \
 struct sockaddr_in servaddr, cliaddr, alladdr;
 control_t control;
 status_t status;
+transport_t transport;
 pthread_mutex_t lock; // sync between UDP thread and main
 void *thread_data_push( void *ptr );
 void *thread_request_handler( void *ptr );
@@ -104,7 +105,7 @@ void *thread_request_handler( void *ptr )
 	servaddr.sin_port=htons(32000);
 	bind(sockfd,(struct sockaddr *)&servaddr,sizeof(servaddr));
 
-	while (!control.sump_exit)
+	while (!transport.exit)
 	{
 		len = sizeof(cliaddr);
 		n = recvfrom(sockfd, mesg, 1000, 0, (struct sockaddr *)&cliaddr, &len);
@@ -158,9 +159,9 @@ void *thread_data_push( void *ptr )
 	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
 	alladdr.sin_addr.s_addr=htonl(INADDR_BROADCAST);
 	
-	while (!control.sump_exit)
+	while (!transport.exit)
 	{
-		if (!control.paired)
+		if (!transport.paired)
 		{
 			sprintf(sendmesg, "SUMPPAIR=0\r\n");
 			sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&alladdr, sizeof(alladdr));
@@ -169,7 +170,7 @@ void *thread_data_push( void *ptr )
 		else
 			data_push();
 			
-		sleep(control.push_period);
+		sleep(transport.push_period);
 	}
 	
 	return NULL;
@@ -186,38 +187,45 @@ void data_push( void )
 	
 	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
 
-	while ()
 	// Send sensor data to host
-	pthread_mutex_lock(&lock);
-	sprintf(sendmesg, "%s=%.1f\r\n", pushlist[].tag, status.humidity_pct);
-	pthread_mutex_unlock(&lock);
-	sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-	printf("%s", sendmesg);
+    i = 0;
+	while (pushlist[i]->tag != NULL)
+    {
+        if (pushlist[i]->data_type == TYPE_INTEGER)
+        {
+            pthread_mutex_lock(&lock);
+            sprintf(sendmesg, "%s=%u\r\n", pushlist[i]->tag, (*unsinged int)pushlist[i]->data);
+            pthread_mutex_unlock(&lock);
+            sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+            printf("%s", sendmesg);
+        }
+        else if (pushlist[i]->data_type == TYPE_FLOAT)
+        {
+            pthread_mutex_lock(&lock);
+            sprintf(sendmesg, "%s=%.1f\r\n", pushlist[i]->tag, (*float)pushlist[i]->data);
+            pthread_mutex_unlock(&lock);
+            sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+            printf("%s", sendmesg);
+        }
+        else if (pushlist[i]->data_type == TYPE_STRING)
+        {
+            pthread_mutex_lock(&lock);
+            sprintf(sendmesg, "%s=%s\r\n", pushlist[i]->tag, *(char*)pushlist[i]->data);
+            pthread_mutex_unlock(&lock);
+            sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+            printf("%s", sendmesg);
+        }
 
-	pthread_mutex_lock(&lock);
-	sprintf(sendmesg, "TEMP=%.1f\r\n", status.temp_f);
-	pthread_mutex_unlock(&lock);
+        i++
+    }
+    
+	sprintf(sendmesg, "SEQUENCENUMBER=%u\r\n", transport.sequencenumber);
 	sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-	printf("%s", sendmesg);
-
-	pthread_mutex_lock(&lock);
-	sprintf(sendmesg, "DISTANCE=%.1f\r\n", status.distance_in);
-	pthread_mutex_unlock(&lock);
-	sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-	printf("%s", sendmesg);
-
-	pthread_mutex_lock(&lock);
-	sprintf(sendmesg, "BEEPER=%s\r\n", (status.beeper) ? "on":"off");
-	pthread_mutex_unlock(&lock);
-	sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-	printf("%s", sendmesg);
-
-	sprintf(sendmesg, "SEQUENCENUMBER=%u\r\n", control.sequencenumber);
-	sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-	control.sequencenumber++;
 	printf("%s", sendmesg);
 	
-	printf("\r\n");
+	transport.sequencenumber++;
+
+    printf("\r\n");
 }
 
 
