@@ -47,9 +47,6 @@ typedef struct
 	char beeper_message[128];
 	int push_period;
 	int sensor_period;
-	int sump_exit;
-	int paired;
-	int sequencenumber;
 	int manualscan;
 } control_t;
 
@@ -60,6 +57,13 @@ typedef struct
 	float distance_in;
 	bool beeper;
 } status_t;
+
+typedef struct transport
+{
+	int paired;
+	int sequencenumber;
+	int sump_exit;
+} transport_t;    
 
 commandlist_t commands = { \
 { "GETHUMIDITY", "HUMIDITY", NULL, TYPE_FLOAT, &status.humidity_pct}, \
@@ -146,6 +150,30 @@ void *thread_request_handler( void *ptr )
 	return NULL;
 }
 
+void *thread_data_push( void *ptr ) 
+{
+	int sockfd;
+	char sendmesg[1000] = {0};
+		
+	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+	alladdr.sin_addr.s_addr=htonl(INADDR_BROADCAST);
+	
+	while (!control.sump_exit)
+	{
+		if (!control.paired)
+		{
+			sprintf(sendmesg, "SUMPPAIR=0\r\n");
+			sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&alladdr, sizeof(alladdr));
+			printf("Broadcasting 'SUMPPAIR=0', to establish pairing\r\n");
+		}
+		else
+			data_push();
+			
+		sleep(control.push_period);
+	}
+	
+	return NULL;
+}
 void data_push( void )
 {
 	int sockfd;
