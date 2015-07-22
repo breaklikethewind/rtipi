@@ -86,7 +86,7 @@ void data_push(void);
 void *thread_request_handler( void *ptr ) 
 {
 	commandlist_t command_list;
-	int sockfd, n;
+	int sockfd, n, i;
 	socklen_t len;
 	char mesg[1000];
 	char sendmesg[1000] = {0};
@@ -106,34 +106,39 @@ void *thread_request_handler( void *ptr )
 		n = recvfrom(sockfd, mesg, 1000, 0, (struct sockaddr *)&cliaddr, &len);
 		printf("-------------------------------------------------------\n");
 		mesg[n] = 0;
+		i = 0;
 		printf("Received: %s\r\n",mesg);
 
-		while (command_list->request != NULL)
+		while (command_list[i]->request != NULL)
 		{
-			if (strncmp(mesg, command_list->request, strlen(command_list->request)) == 0)
+			if (strncmp(mesg, command_list[i]->request, strlen(command_list[i]->request)) == 0)
 			{
-			pthread_mutex_lock(&lock);
-			switch (data_type)
-			{
-				case TYPE_INTEGER:
-					sprintf(sendmesg, "%s=%u\r\n", command_list->tag, *(int*)command_list->data);
-					break;
-				case TYPE_FLOAT:
-					sprintf(sendmesg, "%s=%.1f\r\n", command_list->tag, *(float*)command_list->data);
-					break;
-				case TYPE_STRING:
-					sprintf(sendmesg, "%s=%s\r\n", command_list->tag, *(char**)command_list->data);
-					break;
-			}
-			pthread_mutex_unlock(&lock);
-			sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));				
-			}
-		}		
-		else 
+				pthread_mutex_lock(&lock);
+				switch (command_list[i]->data_type)
+				{
+					case TYPE_INTEGER:
+						sprintf(sendmesg, "%s=%u\r\n", command_list[i]->tag, *(int*)command_list[i]->data);
+						break;
+					case TYPE_FLOAT:
+						sprintf(sendmesg, "%s=%.1f\r\n", command_list[i]->tag, *(float*)command_list[i]->data);
+						break;
+					case TYPE_STRING:
+						sprintf(sendmesg, "%s=%s\r\n", command_list[i]->tag, *(char**)command_list[i]->data);
+						break;
+				}
+				pthread_mutex_unlock(&lock);
+				sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));				
+			}		
+			
+			i++;
+		}
+		
+		if (command_list[i]->request == NULL)
 		{
 			sprintf(sendmesg, "INVALID COMMAND\r\n");
 			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-		}
+		}			
+			
 		printf("Responded: %s", sendmesg);
 		printf("-------------------------------------------------------\n");
 	}
@@ -144,15 +149,19 @@ void *thread_request_handler( void *ptr )
 void data_push( void )
 {
 	int sockfd;
+	pushlist_t pushlist;
 	char sendmesg[1000] = {0};
+	
+	pushlist = 
 
 	printf("Pushing data...\r\n");
 	
 	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
 
+	while ()
 	// Send sensor data to host
 	pthread_mutex_lock(&lock);
-	sprintf(sendmesg, "HUMIDITY=%.1f\r\n", status.humidity_pct);
+	sprintf(sendmesg, "%s=%.1f\r\n", pushlist[].tag, status.humidity_pct);
 	pthread_mutex_unlock(&lock);
 	sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
 	printf("%s", sendmesg);
