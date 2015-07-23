@@ -44,6 +44,7 @@
 #include "beep.h"
 #include "range.h"
 #include "dht_read.h"
+#include "transport.h"
 
 #define BeepPin 2 // Raspberry pi gpio27
 #define EchoPin 7 // Raspberry pi gpio4
@@ -78,16 +79,26 @@ typedef struct
 	bool beeper;
 } status_t;
 
-commandlist commands = { \
-{ "GETHUMIDITY", "HUMIDITY", NULL, TYPE_FLOAT, &status.humidity_pct}, \
-{ "GETTEMP",     "TEMP",     NULL, TYPE_FLOAT, &status.temp_f}, \
-{ NULL,          NULL,       NULL, 0,            NULL} \
+commandlist_t commands = { \
+{ "GETHUMIDITY",     "HUMIDITY",     NULL, TYPE_FLOAT,   &status.humidity_pct}, 
+{ "GETTEMP",         "TEMP",         NULL, TYPE_FLOAT,   &status.temp_f}, 
+{ "GETDISTANCE",     "DISTANCE",     NULL, TYPE_FLOAT,   &status.distance_in},
+{ "GETBEEPER",       "BEEPER",       NULL, TYPE_INTEGER, &status.beeper},
+{ NULL,              NULL,           NULL, 0,            NULL} 
 };
+
+pushlist_t pushlist = { \
+{ "HUMIDITY", TYPE_FLOAT, &status.humidity_pct}, 
+{ "TEMP",     TYPE_FLOAT, &status.temp_f}, 
+{ NULL,       0,          NULL} 
+};
+
 
 struct sockaddr_in servaddr, cliaddr, alladdr;
 control_t control;
 status_t status;
 pthread_mutex_t lock; // sync between UDP thread and main
+commandlist_t command_list;
 void *thread_data_push( void *ptr );
 void *thread_request_handler( void *ptr );
 void *thread_sensor_sample( void *ptr );
@@ -367,15 +378,9 @@ int  main(void)
 	else
 		printf("Launching thread data_push\r\n");
 
-	iret1 = pthread_create( &request_handler, NULL, thread_request_handler, (void*) message2);
-	if(iret1)
-	{
-		fprintf(stderr,"Error - pthread_create() return code: %d\n",iret1);
-		BeepMorse(5, "UDP Thread Create Fail");
-		exit(EXIT_FAILURE);
-	}
-	else
-		printf("Launching thread request_handler\r\n");
+    
+    handle_requests(commandlist, &lock)
+
 
 	iret1 = pthread_create( &sensor_sample, NULL, thread_sensor_sample, (void*) message3);
 	if(iret1)

@@ -48,24 +48,52 @@ typedef struct transport
 	int push_period;
 } transport_t;    
 
-commandlist_t commands = { \
-{ "GETHUMIDITY", "HUMIDITY", NULL, TYPE_FLOAT, &status.humidity_pct}, \
-{ "GETTEMP",     "TEMP",     NULL, TYPE_FLOAT, &status.temp_f}, \
-{ NULL,          NULL,       NULL, 0,            NULL} \
-};
-
-pushlist_t pushlist = { \
-{ "HUMIDITY", TYPE_FLOAT, &status.humidity_pct}, \
-{ "TEMP",     TYPE_FLOAT, &status.temp_f}, \
-{ NULL,       0,          NULL} \
-};
-
 struct sockaddr_in servaddr, cliaddr, alladdr;
 transport_t transport;
 pthread_mutex_t lock; // sync between UDP thread and main
 void *thread_data_push(void *ptr);
 void *thread_request_handler(void *ptr);
 void data_push(pushlist_t* pushlist);
+commandlist_t commandlist[100]; // keep simple, statically allocate 100 possible commands
+
+commandlist_t transport_commands = { \
+{ "SHUTDOWN",        "SHUTDOWN",     NULL, TYPE_INTEGER, },
+{ "SETPUSHPERIOD",   "PUSHPERIOD",   NULL, TYPE_INTEGER, },
+{ "SETSENSORPERIOD", "SENSORPERIOD", NULL, TYPE_INTEGER, },
+{ "SETPAIR",         "PAIR",         NULL, TYPE_INTEGER, },
+{ "SETUPDATE",       "UPDATE",       NULL, TYPE_INTEGER, },
+{ NULL,              NULL,           NULL, 0,            NULL} 
+};
+
+void handle_requests(commandlist_t* device_commandlist, pthread_mutex_t* lock)
+{
+    int i;
+    
+    // merge device command list, and transport command list
+    i = 0;
+    while(transport_commands[i].request != NULL)
+    {
+        memcpy(commandlist[i], transport_commands[i], sizeof(commandlist_t));
+        i++;
+    }
+    
+    while(device_commandlist[i].request != NULL)
+    {
+        memcpy(commandlist[i], device_commandlist[i], sizeof(commandlist_t));
+        i++;
+    }
+    
+	iret1 = pthread_create( &request_handler, NULL, thread_request_handler, (void*) command_list);
+	if(iret1)
+	{
+		fprintf(stderr,"Error - pthread_create() return code: %d\n",iret1);
+		BeepMorse(5, "UDP Thread Create Fail");
+		exit(EXIT_FAILURE);
+	}
+	else
+		printf("Launching thread request_handler\r\n");
+
+}
 
 void *thread_request_handler(void *ptr) 
 {
@@ -106,7 +134,7 @@ void *thread_request_handler(void *ptr)
                 else if (command_list[i]->data != NULL)
                 {
                    // There is no function defined, lets 'stringize' the given variable & respond with that
-                    pthread_mutex_lock(&lock);
+                    pthread_mutex_lock(lock);
                     switch (command_list[i]->data_type)
                     {
                         case TYPE_INTEGER:
@@ -119,7 +147,7 @@ void *thread_request_handler(void *ptr)
                             sprintf(sendmesg, "%s=%s\r\n", command_list[i]->tag, *(char**)command_list[i]->data);
                             break;
                     }
-                    pthread_mutex_unlock(&lock);
+                    pthread_mutex_unlock(lock);
                 }
                 else 
                     // We dont have a function or data we can respond with! Now what???
@@ -186,25 +214,25 @@ void data_push(pushlist_t* pushlist)
     {
         if (pushlist[i]->data_type == TYPE_INTEGER)
         {
-            pthread_mutex_lock(&lock);
+            pthread_mutex_lock(lock);
             sprintf(sendmesg, "%s=%u\r\n", pushlist[i]->tag, (*unsinged int)pushlist[i]->data);
-            pthread_mutex_unlock(&lock);
+            pthread_mutex_unlock(lock);
             sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
             printf("%s", sendmesg);
         }
         else if (pushlist[i]->data_type == TYPE_FLOAT)
         {
-            pthread_mutex_lock(&lock);
+            pthread_mutex_lock(lock);
             sprintf(sendmesg, "%s=%.1f\r\n", pushlist[i]->tag, (*float)pushlist[i]->data);
-            pthread_mutex_unlock(&lock);
+            pthread_mutex_unlock(lock);
             sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
             printf("%s", sendmesg);
         }
         else if (pushlist[i]->data_type == TYPE_STRING)
         {
-            pthread_mutex_lock(&lock);
+            pthread_mutex_lock(lock);
             sprintf(sendmesg, "%s=%s\r\n", pushlist[i]->tag, *(char*)pushlist[i]->data);
-            pthread_mutex_unlock(&lock);
+            pthread_mutex_unlock(lock);
             sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
             printf("%s", sendmesg);
         }

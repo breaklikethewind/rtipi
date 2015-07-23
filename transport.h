@@ -24,4 +24,5 @@ typedef struct pushlist
 	void* data;
 } pushlist_t;
 
+void handle_requests(commandlist_t* device_commandlist, pthread_mutex_t* lock);
 
