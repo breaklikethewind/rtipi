@@ -6,6 +6,8 @@ enum {
 	TYPE_STRING
 } data_type_e;
 
+typedef int (*cmdfunc)(char* request, char* response);
+
 typedef struct commandlist
 {
 	char request[20];

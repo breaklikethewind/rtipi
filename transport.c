@@ -38,24 +38,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-typedef struct
-{
-	unsigned int humidity_alarm_setpoint;
-	unsigned int temp_alarm_setpoint;
-	unsigned int distance_alarm_setpoint;
-	bool beeper_state;
-	char beeper_message[128];
-	int sensor_period;
-	int manualscan;
-} control_t;
-
-typedef struct
-{
-	float humidity_pct;
-	float temp_f;
-	float distance_in;
-	bool beeper;
-} status_t;
+#define PAIR_PERIOD 30
 
 typedef struct transport
 {
@@ -78,17 +61,13 @@ pushlist_t pushlist = { \
 };
 
 struct sockaddr_in servaddr, cliaddr, alladdr;
-control_t control;
-status_t status;
 transport_t transport;
 pthread_mutex_t lock; // sync between UDP thread and main
-void *thread_data_push( void *ptr );
-void *thread_request_handler( void *ptr );
-void *thread_sensor_sample( void *ptr );
-void measure(void);
-void data_push(void);
+void *thread_data_push(void *ptr);
+void *thread_request_handler(void *ptr);
+void data_push(pushlist_t* pushlist);
 
-void *thread_request_handler( void *ptr ) 
+void *thread_request_handler(void *ptr) 
 {
 	commandlist_t command_list;
 	int sockfd, n, i;
@@ -118,21 +97,34 @@ void *thread_request_handler( void *ptr )
 		{
 			if (strncmp(mesg, command_list[i]->request, strlen(command_list[i]->request)) == 0)
 			{
-				pthread_mutex_lock(&lock);
-				switch (command_list[i]->data_type)
-				{
-					case TYPE_INTEGER:
-						sprintf(sendmesg, "%s=%u\r\n", command_list[i]->tag, *(int*)command_list[i]->data);
-						break;
-					case TYPE_FLOAT:
-						sprintf(sendmesg, "%s=%.1f\r\n", command_list[i]->tag, *(float*)command_list[i]->data);
-						break;
-					case TYPE_STRING:
-						sprintf(sendmesg, "%s=%s\r\n", command_list[i]->tag, *(char**)command_list[i]->data);
-						break;
-				}
-				pthread_mutex_unlock(&lock);
-				sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));				
+                if (command_list[i]->commandfunc != NULL)
+                {
+                    // There is a function defined, call the function to get the data string
+                    command_list[i]->commandfunc(command_list[i]->tag, commandfuncdata);
+                    sprintf(sendmesg, "%s=%s\r\n", command_list[i]->tag, commandfuncdata);
+                }
+                else if (command_list[i]->data != NULL)
+                {
+                   // There is no function defined, lets 'stringize' the given variable & respond with that
+                    pthread_mutex_lock(&lock);
+                    switch (command_list[i]->data_type)
+                    {
+                        case TYPE_INTEGER:
+                            sprintf(sendmesg, "%s=%u\r\n", command_list[i]->tag, *(int*)command_list[i]->data);
+                            break;
+                        case TYPE_FLOAT:
+                            sprintf(sendmesg, "%s=%.1f\r\n", command_list[i]->tag, *(float*)command_list[i]->data);
+                            break;
+                        case TYPE_STRING:
+                            sprintf(sendmesg, "%s=%s\r\n", command_list[i]->tag, *(char**)command_list[i]->data);
+                            break;
+                    }
+                    pthread_mutex_unlock(&lock);
+                }
+                else 
+                    // We dont have a function or data we can respond with! Now what???
+                    return -1;
+            sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));				
 			}		
 			
 			i++;
@@ -151,7 +143,7 @@ void *thread_request_handler( void *ptr )
 	return NULL;
 }
 
-void *thread_data_push( void *ptr ) 
+void *thread_data_push(void *ptr) 
 {
 	int sockfd;
 	char sendmesg[1000] = {0};
@@ -163,26 +155,27 @@ void *thread_data_push( void *ptr )
 	{
 		if (!transport.paired)
 		{
-			sprintf(sendmesg, "SUMPPAIR=0\r\n");
+			sprintf(sendmesg, "PAIR=0\r\n");
 			sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&alladdr, sizeof(alladdr));
-			printf("Broadcasting 'SUMPPAIR=0', to establish pairing\r\n");
+			printf("Broadcasting 'PAIR=0', to establish pairing\r\n");
+            sleep(PAIR_PERIOD);
 		}
 		else
-			data_push();
-			
-		sleep(transport.push_period);
+        {
+			data_push((pushlist_t)ptr);
+            sleep(transport.push_period);
+        }
 	}
 	
 	return NULL;
 }
-void data_push( void )
+
+void data_push(pushlist_t* pushlist)
 {
 	int sockfd;
 	pushlist_t pushlist;
-	char sendmesg[1000] = {0};
+	char sendmesg[100] = {0};
 	
-	pushlist = 
-
 	printf("Pushing data...\r\n");
 	
 	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
