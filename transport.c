@@ -233,36 +233,36 @@ void data_push(pushlist_t* pushlist)
 	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
 
 	// Send sensor data to host
-    i = 0;
+	i = 0;
 	while (pushlist[i]->tag != NULL)
-    {
-        if (pushlist[i]->data_type == TYPE_INTEGER)
-        {
-            pthread_mutex_lock(lock);
-            sprintf(sendmesg, "%s=%u\r\n", pushlist[i]->tag, (*unsinged int)pushlist[i]->data);
-            pthread_mutex_unlock(lock);
-            sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-            printf("%s", sendmesg);
-        }
-        else if (pushlist[i]->data_type == TYPE_FLOAT)
-        {
-            pthread_mutex_lock(lock);
-            sprintf(sendmesg, "%s=%.1f\r\n", pushlist[i]->tag, (*float)pushlist[i]->data);
-            pthread_mutex_unlock(lock);
-            sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-            printf("%s", sendmesg);
-        }
-        else if (pushlist[i]->data_type == TYPE_STRING)
-        {
-            pthread_mutex_lock(lock);
-            sprintf(sendmesg, "%s=%s\r\n", pushlist[i]->tag, *(char*)pushlist[i]->data);
-            pthread_mutex_unlock(lock);
-            sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-            printf("%s", sendmesg);
-        }
+	{
+		if (pushlist[i]->data_type == TYPE_INTEGER)
+		{
+		    pthread_mutex_lock(lock);
+		    sprintf(sendmesg, "%s=%u\r\n", pushlist[i]->tag, (*unsinged int)pushlist[i]->data);
+		    pthread_mutex_unlock(lock);
+		    sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+		    printf("%s", sendmesg);
+		}
+		else if (pushlist[i]->data_type == TYPE_FLOAT)
+		{
+		    pthread_mutex_lock(lock);
+		    sprintf(sendmesg, "%s=%.1f\r\n", pushlist[i]->tag, (*float)pushlist[i]->data);
+		    pthread_mutex_unlock(lock);
+		    sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+		    printf("%s", sendmesg);
+		}
+		else if (pushlist[i]->data_type == TYPE_STRING)
+		{
+		    pthread_mutex_lock(lock);
+		    sprintf(sendmesg, "%s=%s\r\n", pushlist[i]->tag, *(char*)pushlist[i]->data);
+		    pthread_mutex_unlock(lock);
+		    sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+		    printf("%s", sendmesg);
+		}
 
-        i++
-    }
+		i++
+	}
     
 	sprintf(sendmesg, "SEQUENCENUMBER=%u\r\n", transport.sequencenumber);
 	sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
