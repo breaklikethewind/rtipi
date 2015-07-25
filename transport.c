@@ -37,6 +37,7 @@
 #include <signal.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include "transport.h"
 
 #define PAIR_PERIOD 30
 
@@ -67,6 +68,14 @@ commandlist_t transport_commands = { \
 
 void thread_exit()
 {
+	int sockfd;
+	char sendmesg[200] = {0};
+
+	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+	sprintf(sendmesg, "PAIR=0\r\n");
+	sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&alladdr, sizeof(alladdr));
+	
 	transport.exit = 1;
 	pthread_join(request_thread, NULL);
 	pthread_join(push_thread, NULL);
@@ -114,7 +123,7 @@ void *thread_request_handler(void *ptr)
 	
 	command_list = (commandlist_t)ptr;
 
-	sockfd=socket(AF_INET, SOCK_DGRAM, 0);
+	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
 
 	servaddr.sin_family = AF_INET;
 	servaddr.sin_addr.s_addr=htonl(INADDR_ANY);

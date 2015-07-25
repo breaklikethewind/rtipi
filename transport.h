@@ -1,6 +1,7 @@
 
 
-enum {
+typedef enum {
+	TYPE_NULL,
 	TYPE_INTEGER,
 	TYPE_FLOAT,
 	TYPE_STRING
@@ -26,5 +27,5 @@ typedef struct pushlist
 
 void handle_requests(commandlist_t* device_commandlist, pthread_mutex_t* lock, int* exit);
 void push_data(pushlist_t* pushdata, pthread_mutex_t* lock, int* exit);
-void thread_exit();
+void thread_exit(void);
 

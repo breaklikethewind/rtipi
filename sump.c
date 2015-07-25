@@ -62,33 +62,37 @@ typedef struct
 	char morse[80];
 } status_t;
 
-commandlist_t commandlist = { \
-{ "GETHUMIDITY",     "HUMIDITY",     NULL,   TYPE_FLOAT,   &status.humidity_pct}, 
-{ "GETTEMP",         "TEMP",         NULL,   TYPE_FLOAT,   &status.temp_f}, 
-{ "GETDISTANCE",     "DISTANCE",     NULL,   TYPE_FLOAT,   &status.distance_in},
-{ "GETBEEPER",       "BEEPER",       NULL,   TYPE_INTEGER, &status.beeper},
-{ "DOMORSE",         "MORSE",        &morse, TYPE_STRING,  NULL},
-{ "SETSENSORPERIOD", "SENSORPERIOD", NULL,   TYPE_INTEGER, &sensor_period},
-{ NULL,              NULL,           NULL,   0,            NULL} 
-};
-
-pushlist_t pushlist = { \
-{ "HUMIDITY", TYPE_FLOAT,   &status.humidity_pct}, 
-{ "TEMP",     TYPE_FLOAT,   &status.temp_f}, 
-{ "DISTANCE", TYPE_FLOAT,   &status.distance_in},
-{ "BEEPER",   TYPE_INTEGER, &status.beeper},
-{ NULL,       0,          NULL} 
-};
-
 status_t status;
-int exit;
 int sensor_period = DEFAULT_SENSOR_PERIOD;
+int exitflag = 0;
 pthread_mutex_t lock; // sync between UDP thread and main
 commandlist_t command_list;
 void *thread_sensor_sample( void *ptr );
 void measure(void);
 
 typedef int (*cmdfunc)(char* request, char* response);
+
+int morse(char* request, char* response); 
+int app_exit(char* request, char* response);
+
+commandlist_t commandlist[] = { \
+{ "GETHUMIDITY",     "HUMIDITY",     NULL,   TYPE_FLOAT,   &status.humidity_pct}, 
+{ "GETTEMP",         "TEMP",         NULL,   TYPE_FLOAT,   &status.temp_f}, 
+{ "GETDISTANCE",     "DISTANCE",     NULL,   TYPE_FLOAT,   &status.distance_in},
+{ "GETBEEPER",       "BEEPER",       NULL,   TYPE_INTEGER, &status.beeper},
+{ "DOMORSE",         "MORSE",        &morse, TYPE_STRING,  NULL},
+{ "SETSENSORPERIOD", "SENSORPERIOD", NULL,   TYPE_INTEGER, &sensor_period},
+{ "EXIT",            "EXIT",         &app_exit, TYPE_INTEGER, &exitflag},
+{ NULL,              NULL,           NULL,   TYPE_NULL,    NULL}
+};
+
+pushlist_t pushlist[] = { \
+{ "HUMIDITY", TYPE_FLOAT,   &status.humidity_pct}, 
+{ "TEMP",     TYPE_FLOAT,   &status.temp_f}, 
+{ "DISTANCE", TYPE_FLOAT,   &status.distance_in},
+{ "BEEPER",   TYPE_INTEGER, &status.beeper},
+{ NULL,       TYPE_NULL,          NULL} 
+};
 
 int morse(char* request, char* response) 
 {
@@ -97,10 +101,18 @@ int morse(char* request, char* response)
 	return 0;
 }
 
+int app_exit(char* request, char* response)
+{
+	exitflag = 1;
+	sprintf(response, "1");
+	
+	return 0;
+}
+
 void *thread_sensor_sample( void *ptr ) 
 {
 	
-	while (!control.sump_exit)
+	while (!exitflag)
 	{
 		measure();
 		sleep(sensor_period);
@@ -123,23 +135,6 @@ void measure( void )
 	pthread_mutex_unlock(&lock);
 }
 
-void sump_unpair( void ) 
-{
-	int sockfd;
-	char sendmesg[1000] = {0};
-		
-	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-	
-	if (!control.paired)
-	{
-		sprintf(sendmesg, "SUMPPAIR=0\r\n");
-		sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
-		printf("Sending 'SUMPPAIR=0' to %s, to unpair\r\n", HOST_IP);
-	}
-	
-	return;
-}
-
 /*
  *********************************************************************************
  * main
@@ -149,13 +144,7 @@ void sump_unpair( void )
 int  main(void)
 {
 	int  iret1;
-
-	exit = 0;
-	bzero(&servaddr,sizeof(servaddr));
-	control.push_period = DEFAULT_PUSH_PERIOD;
-	control.sensor_period = DEFAULT_SENSOR_PERIOD;
-	control.sump_exit = 0;
-	control.paired = 0;
+	pthread_t sensor_sample;
 
 	// Setup GPIO's, Timers, Interrupts, etc
 	wiringPiSetup() ;
@@ -169,40 +158,34 @@ int  main(void)
 	{
 		BeepMorse(5, "Mutex Fail");
 		fprintf(stderr,"Error - mutex init failed, return code: %d\n",iret1);
-		exit(EXIT_FAILURE);
+		return -1;
 	}
 
-	handle_requests(commandlist, &lock);
+	handle_requests(commandlist, &lock, &exitflag);
 	
-	push_data(pushlist, &lock);
+	push_data(pushlist, &lock, &exitflag);
 
-	iret1 = pthread_create( &sensor_sample, NULL, thread_sensor_sample, (void*) message3);
+	iret1 = pthread_create( &sensor_sample, NULL, thread_sensor_sample, NULL);
 	if(iret1)
 	{
 		fprintf(stderr,"Error - pthread_create() return code: %d\n",iret1);
 		BeepMorse(5, "thread_sensor_sample Thread Create Fail");
-		exit(EXIT_FAILURE);
+		return -2;
 	}
 	else
 		printf("Launching thread sensor_sample\r\n");
 
 	BeepMorse(5, "OK");
 	
-	while (!control.sump_exit) 
-		if (getchar() == ' ') 
-			control.sump_exit = 1; 
-		else 
-			sleep(0);
-	
 	printf("Sump Exit Set...\r\n");
 	
 	// Exit	
+	thread_exit();
 	pthread_join(sensor_sample, NULL);
 	pthread_mutex_destroy(&lock);
 
-	sump_unpair();
-
 	BeepMorse(5, "Exit");
+	
 	return 0;
 }
 
