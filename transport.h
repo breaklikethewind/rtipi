@@ -25,7 +25,7 @@ typedef struct
 	void* data;
 } pushlist_t;
 
-int tp_handle_requests(commandlist_t* device_commandlist, pthread_mutex_t* lock, int* exitflag);
-int tp_handle_data_push(pushlist_t* pushdata, pthread_mutex_t* lock, int* exitflag);
+int tp_handle_requests(commandlist_t* device_commandlist, pthread_mutex_t* lock);
+int tp_handle_data_push(pushlist_t* pushdata, pthread_mutex_t* lock);
 void tp_stop_handlers(void);
 

@@ -53,11 +53,15 @@ typedef struct transport
 struct sockaddr_in servaddr, cliaddr, alladdr;
 pthread_t request_thread, push_thread;
 transport_t transport;
-pthread_mutex_t lock; // sync between UDP thread and main
+pthread_mutex_t* req_lock; 
+pthread_mutex_t* push_lock;
 void *thread_data_push(void *ptr);
 void *thread_request_handler(void *ptr);
 void data_push(pushlist_t* pushlist);
 commandlist_t commandlist[100]; // keep simple, statically allocate 100 possible commands
+int req_err = 0;
+int push_err = 0;
+
 
 commandlist_t transport_commands[] = { 
 { "SHUTDOWN",        "SHUTDOWN",     NULL, TYPE_INTEGER, &transport.exit},
@@ -82,7 +86,7 @@ void tp_stop_handlers()
 	pthread_join(push_thread, NULL);
 }
 
-int tp_handle_requests(commandlist_t* device_commandlist, pthread_mutex_t* lock, int* exitflag)
+int tp_handle_requests(commandlist_t* device_commandlist, pthread_mutex_t* lock)
 {
 	int i;
 	int err;
@@ -113,8 +117,9 @@ int tp_handle_requests(commandlist_t* device_commandlist, pthread_mutex_t* lock,
 		return 0;
 	}
 	
-	*exitflag = 1;
-	return 0;
+	req_lock = lock;
+	
+	return req_err;
 }
 
 void *thread_request_handler(void *ptr) 
@@ -155,7 +160,7 @@ void *thread_request_handler(void *ptr)
 			else if (command_list[i].data != NULL)
 			{
 			   // There is no function defined, lets 'stringize' the given variable & respond with that
-			    pthread_mutex_lock(lock);
+			    pthread_mutex_lock(req_lock);
 			    switch (command_list[i].data_type)
 			    {
 				case TYPE_INTEGER:
@@ -167,12 +172,15 @@ void *thread_request_handler(void *ptr)
 				case TYPE_STRING:
 				    sprintf(sendmesg, "%s=%s\r\n", command_list[i].tag, *(char**)command_list[i].data);
 				    break;
+				case TYPE_NULL:
+				    break;
 			    }
-			    pthread_mutex_unlock(lock);
+			    pthread_mutex_unlock(req_lock);
 			}
 			else 
-			    // We dont have a function or data we can respond with! Now what???
-			    return -1;
+				// We dont have a function or data we can respond with! Now what???
+				req_err = -1;
+				return NULL;
 			
 			sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));				
 			
@@ -189,10 +197,11 @@ void *thread_request_handler(void *ptr)
 		printf("-------------------------------------------------------\n");
 	}
 	
+	req_err = 0;
 	return NULL;
 }
 
-int tp_handle_data_push(pushlist_t* pushlist, pthread_mutex_t* lock, int* exitflag)
+int tp_handle_data_push(pushlist_t* pushlist, pthread_mutex_t* lock)
 {
 	int iret; 
 	
@@ -208,8 +217,9 @@ int tp_handle_data_push(pushlist_t* pushlist, pthread_mutex_t* lock, int* exitfl
 		return 0;
 	}
 	
-	*exitflag = 1;
-	return 0;
+	push_lock = lock;
+	
+	return push_err;
 }
 
 void *thread_data_push(void *ptr) 
@@ -231,18 +241,19 @@ void *thread_data_push(void *ptr)
 		}
 		else
 		{
-			data_push((pushlist_t)ptr);
+			data_push((pushlist_t*)ptr);
 			sleep(transport.push_period);
 		}
 	}
 	
+	push_err = 0;
 	return NULL;
 }
 
 void data_push(pushlist_t* pushlist)
 {
+	int i;
 	int sockfd;
-	pushlist_t pushlist;
 	char sendmesg[100] = {0};
 	
 	printf("Pushing data...\r\n");
@@ -251,34 +262,34 @@ void data_push(pushlist_t* pushlist)
 
 	// Send sensor data to host
 	i = 0;
-	while (pushlist[i]->tag != NULL)
+	while (pushlist[i].tag != NULL)
 	{
-		if (pushlist[i]->data_type == TYPE_INTEGER)
+		if (pushlist[i].data_type == TYPE_INTEGER)
 		{
-		    pthread_mutex_lock(lock);
-		    sprintf(sendmesg, "%s=%u\r\n", pushlist[i]->tag, (*unsinged int)pushlist[i]->data);
-		    pthread_mutex_unlock(lock);
+		    pthread_mutex_lock(push_lock);
+		    sprintf(sendmesg, "%s=%u\r\n", pushlist[i].tag, *(unsigned int*)pushlist[i].data);
+		    pthread_mutex_unlock(push_lock);
 		    sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
 		    printf("%s", sendmesg);
 		}
-		else if (pushlist[i]->data_type == TYPE_FLOAT)
+		else if (pushlist[i].data_type == TYPE_FLOAT)
 		{
-		    pthread_mutex_lock(lock);
-		    sprintf(sendmesg, "%s=%.1f\r\n", pushlist[i]->tag, (*float)pushlist[i]->data);
-		    pthread_mutex_unlock(lock);
+		    pthread_mutex_lock(push_lock);
+		    sprintf(sendmesg, "%s=%.1f\r\n", pushlist[i].tag, *(float*)pushlist[i].data);
+		    pthread_mutex_unlock(push_lock);
 		    sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
 		    printf("%s", sendmesg);
 		}
-		else if (pushlist[i]->data_type == TYPE_STRING)
+		else if (pushlist[i].data_type == TYPE_STRING)
 		{
-		    pthread_mutex_lock(lock);
-		    sprintf(sendmesg, "%s=%s\r\n", pushlist[i]->tag, *(char*)pushlist[i]->data);
-		    pthread_mutex_unlock(lock);
+		    pthread_mutex_lock(push_lock);
+		    sprintf(sendmesg, "%s=%s\r\n", pushlist[i].tag, (char*)pushlist[i].data);
+		    pthread_mutex_unlock(push_lock);
 		    sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
 		    printf("%s", sendmesg);
 		}
 
-		i++
+		i++;
 	}
     
 	sprintf(sendmesg, "SEQUENCENUMBER=%u\r\n", transport.sequencenumber);

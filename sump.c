@@ -161,9 +161,9 @@ int  main(void)
 		return -1;
 	}
 
-	tp_handle_requests(commandlist, &lock, &exitflag);
+	tp_handle_requests(commandlist, &lock);
 	
-	tp_handle_data_push(pushlist, &lock, &exitflag);
+	tp_handle_data_push(pushlist, &lock);
 
 	iret1 = pthread_create( &sensor_sample, NULL, thread_sensor_sample, NULL);
 	if(iret1)
