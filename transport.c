@@ -30,6 +30,7 @@
 #include <stdbool.h>
 #include <unistd.h>
 #include <termios.h>
+#include <pthread.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <time.h>
@@ -58,15 +59,15 @@ void *thread_request_handler(void *ptr);
 void data_push(pushlist_t* pushlist);
 commandlist_t commandlist[100]; // keep simple, statically allocate 100 possible commands
 
-commandlist_t transport_commands = { \
+commandlist_t transport_commands[] = { 
 { "SHUTDOWN",        "SHUTDOWN",     NULL, TYPE_INTEGER, &transport.exit},
 { "SETPUSHPERIOD",   "PUSHPERIOD",   NULL, TYPE_INTEGER, &transport.push_period},
 { "SETPAIR",         "PAIR",         NULL, TYPE_INTEGER, &transport.paired},
-{ "SETUPDATE",       "UPDATE",       NULL, TYPE_INTEGER, },
-{ NULL,              NULL,           NULL, 0,            NULL} 
+{ "SENDUPDATE",      "UPDATE",       NULL, TYPE_INTEGER, NULL},
+{ "",                "",             NULL, TYPE_NULL,    NULL} 
 };
 
-void thread_exit()
+void tp_stop_handlers()
 {
 	int sockfd;
 	char sendmesg[200] = {0};
@@ -81,26 +82,27 @@ void thread_exit()
 	pthread_join(push_thread, NULL);
 }
 
-int handle_requests(commandlist_t* device_commandlist, pthread_mutex_t* lock)
+int tp_handle_requests(commandlist_t* device_commandlist, pthread_mutex_t* lock, int* exitflag)
 {
 	int i;
+	int err;
 
 	// merge device command list, and transport command list
 	i = 0;
 	while(transport_commands[i].request != NULL)
 	{
-		memcpy(commandlist[i], transport_commands[i], sizeof(commandlist_t));
+		memcpy((void*)&(device_commandlist[i]), (void*)&(transport_commands[i]), sizeof(commandlist_t));
 		i++;
 	}
 
 	while(device_commandlist[i].request != NULL)
 	{
-		memcpy(commandlist[i], device_commandlist[i], sizeof(commandlist_t));
+		memcpy((void*)&(device_commandlist[i]), (void*)&(device_commandlist[i]), sizeof(commandlist_t));
 		i++;
 	}
     
-	iret1 = pthread_create( &request_thread, NULL, thread_request_handler, (void*) command_list);
-	if(iret1)
+	err = pthread_create( &request_thread, NULL, thread_request_handler, (void*)&commandlist);
+	if(err)
 	{
 		printf("Error - pthread_create() fail\r\n");
 		return -1;
@@ -110,18 +112,21 @@ int handle_requests(commandlist_t* device_commandlist, pthread_mutex_t* lock)
 		printf("Launching thread request_handler\r\n");
 		return 0;
 	}
+	
+	*exitflag = 1;
+	return 0;
 }
 
 void *thread_request_handler(void *ptr) 
 {
-	commandlist_t command_list;
+	commandlist_t* command_list;
 	int sockfd, n, i;
 	socklen_t len;
 	char mesg[100];
 	char sendmesg[200] = {0};
 	char commandfuncdata[100];
 	
-	command_list = (commandlist_t)ptr;
+	command_list = (commandlist_t*)ptr;
 
 	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
 
@@ -139,28 +144,28 @@ void *thread_request_handler(void *ptr)
 		i = 0;
 		printf("Received: %s\r\n",mesg);
 
-		while (command_list[i]->request != NULL)
+		while (command_list[i].request != NULL)
 		{
-			if (command_list[i]->commandfunc != NULL)
+			if (command_list[i].commandfunc != NULL)
 			{
 			    // There is a function defined, call the function to get the data string
-			    command_list[i]->commandfunc(command_list[i]->tag, commandfuncdata);
-			    sprintf(sendmesg, "%s=%s\r\n", command_list[i]->tag, commandfuncdata);
+			    command_list[i].commandfunc(command_list[i].tag, commandfuncdata);
+			    sprintf(sendmesg, "%s=%s\r\n", command_list[i].tag, commandfuncdata);
 			}
-			else if (command_list[i]->data != NULL)
+			else if (command_list[i].data != NULL)
 			{
 			   // There is no function defined, lets 'stringize' the given variable & respond with that
 			    pthread_mutex_lock(lock);
-			    switch (command_list[i]->data_type)
+			    switch (command_list[i].data_type)
 			    {
 				case TYPE_INTEGER:
-				    sprintf(sendmesg, "%s=%u\r\n", command_list[i]->tag, *(int*)command_list[i]->data);
+				    sprintf(sendmesg, "%s=%u\r\n", command_list[i].tag, *(int*)command_list[i].data);
 				    break;
 				case TYPE_FLOAT:
-				    sprintf(sendmesg, "%s=%.1f\r\n", command_list[i]->tag, *(float*)command_list[i]->data);
+				    sprintf(sendmesg, "%s=%.1f\r\n", command_list[i].tag, *(float*)command_list[i].data);
 				    break;
 				case TYPE_STRING:
-				    sprintf(sendmesg, "%s=%s\r\n", command_list[i]->tag, *(char**)command_list[i]->data);
+				    sprintf(sendmesg, "%s=%s\r\n", command_list[i].tag, *(char**)command_list[i].data);
 				    break;
 			    }
 			    pthread_mutex_unlock(lock);
@@ -174,7 +179,7 @@ void *thread_request_handler(void *ptr)
 			i++;
 		}
 		
-		if (command_list[i]->request == NULL)
+		if (command_list[i].request == NULL)
 		{
 			sprintf(sendmesg, "INVALID COMMAND\r\n");
 			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
@@ -187,7 +192,7 @@ void *thread_request_handler(void *ptr)
 	return NULL;
 }
 
-int push_data(pushlist_t* pushlist, pthread_mutex_t* lock)
+int tp_handle_data_push(pushlist_t* pushlist, pthread_mutex_t* lock, int* exitflag)
 {
 	int iret; 
 	
@@ -202,6 +207,9 @@ int push_data(pushlist_t* pushlist, pthread_mutex_t* lock)
 		printf("Launching thread request_handler\r\n");
 		return 0;
 	}
+	
+	*exitflag = 1;
+	return 0;
 }
 
 void *thread_data_push(void *ptr) 

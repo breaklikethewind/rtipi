@@ -75,23 +75,23 @@ typedef int (*cmdfunc)(char* request, char* response);
 int morse(char* request, char* response); 
 int app_exit(char* request, char* response);
 
-commandlist_t commandlist[] = { \
-{ "GETHUMIDITY",     "HUMIDITY",     NULL,   TYPE_FLOAT,   &status.humidity_pct}, 
-{ "GETTEMP",         "TEMP",         NULL,   TYPE_FLOAT,   &status.temp_f}, 
-{ "GETDISTANCE",     "DISTANCE",     NULL,   TYPE_FLOAT,   &status.distance_in},
-{ "GETBEEPER",       "BEEPER",       NULL,   TYPE_INTEGER, &status.beeper},
-{ "DOMORSE",         "MORSE",        &morse, TYPE_STRING,  NULL},
-{ "SETSENSORPERIOD", "SENSORPERIOD", NULL,   TYPE_INTEGER, &sensor_period},
+commandlist_t commandlist[] = { 
+{ "GETHUMIDITY",     "HUMIDITY",     NULL,      TYPE_FLOAT,   &status.humidity_pct}, 
+{ "GETTEMP",         "TEMP",         NULL,      TYPE_FLOAT,   &status.temp_f}, 
+{ "GETDISTANCE",     "DISTANCE",     NULL,      TYPE_FLOAT,   &status.distance_in},
+{ "GETBEEPER",       "BEEPER",       NULL,      TYPE_INTEGER, &status.beeper},
+{ "DOMORSE",         "MORSE",        &morse,    TYPE_STRING,  NULL},
+{ "SETSENSORPERIOD", "SENSORPERIOD", NULL,      TYPE_INTEGER, &sensor_period},
 { "EXIT",            "EXIT",         &app_exit, TYPE_INTEGER, &exitflag},
-{ NULL,              NULL,           NULL,   TYPE_NULL,    NULL}
+{ "",                "",             NULL,      TYPE_NULL,    NULL}
 };
-
+ 
 pushlist_t pushlist[] = { \
 { "HUMIDITY", TYPE_FLOAT,   &status.humidity_pct}, 
 { "TEMP",     TYPE_FLOAT,   &status.temp_f}, 
 { "DISTANCE", TYPE_FLOAT,   &status.distance_in},
 { "BEEPER",   TYPE_INTEGER, &status.beeper},
-{ NULL,       TYPE_NULL,          NULL} 
+{ "",         TYPE_NULL,          NULL} 
 };
 
 int morse(char* request, char* response) 
@@ -161,9 +161,9 @@ int  main(void)
 		return -1;
 	}
 
-	handle_requests(commandlist, &lock, &exitflag);
+	tp_handle_requests(commandlist, &lock, &exitflag);
 	
-	push_data(pushlist, &lock, &exitflag);
+	tp_handle_data_push(pushlist, &lock, &exitflag);
 
 	iret1 = pthread_create( &sensor_sample, NULL, thread_sensor_sample, NULL);
 	if(iret1)
@@ -177,10 +177,12 @@ int  main(void)
 
 	BeepMorse(5, "OK");
 	
+	while (!exitflag);
+	
 	printf("Sump Exit Set...\r\n");
 	
 	// Exit	
-	thread_exit();
+	tp_stop_handlers();
 	pthread_join(sensor_sample, NULL);
 	pthread_mutex_destroy(&lock);
 
