@@ -91,13 +91,34 @@ pushlist_t pushlist[] = { \
 { "TEMP",     TYPE_FLOAT,   &status.temp_f}, 
 { "DISTANCE", TYPE_FLOAT,   &status.distance_in},
 { "BEEPER",   TYPE_INTEGER, &status.beeper},
-{ "",         TYPE_NULL,          NULL} 
+{ "",         TYPE_NULL,    NULL} 
 };
+
+commandlist_t* find_request(char* request)
+{
+	int i;
+	
+	i = 0;
+	while(commandlist[i].request != NULL)
+	{
+		if (strcmp(commandlist[i].request, request) == 0)
+			continue;
+	}
+ 
+	if (strcmp(commandlist[i].request, "") == 0)
+		return NULL;
+	else
+		return &(commandlist[i]);
+}
 
 int morse(char* request, char* response) 
 {
+	commandlist_t* command;
+	
+	command = find_request(request);
 	BeepMorse(5, request);
-	strcpy(response, request);
+	strcpy(response, command->request);
+	
 	return 0;
 }
 
@@ -149,6 +170,7 @@ int  main(void)
 	// Setup GPIO's, Timers, Interrupts, etc
 	wiringPiSetup() ;
 
+	// Initialize sensors
 	BeepInit(BeepPin, 0);
 	RangeInit(EchoPin, TriggerPin, 0);
 	dht_init(DHTPin);
@@ -177,7 +199,7 @@ int  main(void)
 
 	BeepMorse(5, "OK");
 	
-	while (!exitflag);
+	while (!exitflag) sleep(0);
 	
 	printf("Sump Exit Set...\r\n");
 	
