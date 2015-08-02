@@ -50,26 +50,40 @@ typedef struct transport
 	int push_period;
 } transport_t;    
 
-struct sockaddr_in servaddr, cliaddr, alladdr;
-pthread_t request_thread, push_thread;
-transport_t transport;
-pthread_mutex_t* req_lock; 
-pthread_mutex_t* push_lock;
 void *thread_data_push(void *ptr);
 void *thread_request_handler(void *ptr);
 void data_push(pushlist_t* pushlist);
+int sendupdate(char* request, char* response);
+
+struct sockaddr_in servaddr, cliaddr, alladdr;
+static pthread_t request_thread, push_thread;
+static transport_t transport;
+static pushlist_t* pushlist;
+static pthread_mutex_t req_lock; 
+static pthread_mutex_t push_lock;
+
 commandlist_t commandlist[100]; // keep simple, statically allocate 100 possible commands
 int req_err = 0;
 int push_err = 0;
 
+commandlist_t sequence_number = 
+{ "",        "SEQUENCENUMBER",       NULL, TYPE_INTEGER, &transport.sequencenumber};
 
 commandlist_t transport_commands[] = { 
 { "SHUTDOWN",        "SHUTDOWN",     NULL, TYPE_INTEGER, &transport.exit},
 { "SETPUSHPERIOD",   "PUSHPERIOD",   NULL, TYPE_INTEGER, &transport.push_period},
 { "SETPAIR",         "PAIR",         NULL, TYPE_INTEGER, &transport.paired},
-{ "SENDUPDATE",      "UPDATE",       NULL, TYPE_INTEGER, NULL},
+{ "SENDUPDATE",      "UPDATE",       &sendupdate, TYPE_INTEGER, NULL},
 { "",                "",             NULL, TYPE_NULL,    NULL} 
 };
+
+int sendupdate(char* request, char* response)
+{
+	sprintf(response, "1");
+	data_push(pushlist);
+	
+	return 0;
+}
 
 void tp_stop_handlers()
 {
@@ -93,15 +107,15 @@ int tp_handle_requests(commandlist_t* device_commandlist, pthread_mutex_t* lock)
 
 	// merge device command list, and transport command list
 	i = 0;
-	while(transport_commands[i].request != NULL)
+	while(strlen(transport_commands[i].request) != 0)
 	{
-		memcpy((void*)&(device_commandlist[i]), (void*)&(transport_commands[i]), sizeof(commandlist_t));
+		memcpy((void*)&(commandlist[i]), (void*)&(transport_commands[i]), sizeof(commandlist_t));
 		i++;
 	}
 
-	while(device_commandlist[i].request != NULL)
+	while(strlen(device_commandlist[i].request) != 0)
 	{
-		memcpy((void*)&(device_commandlist[i]), (void*)&(device_commandlist[i]), sizeof(commandlist_t));
+		memcpy((void*)&(commandlist[i]), (void*)&(device_commandlist[i]), sizeof(commandlist_t));
 		i++;
 	}
     
@@ -117,7 +131,7 @@ int tp_handle_requests(commandlist_t* device_commandlist, pthread_mutex_t* lock)
 		return 0;
 	}
 	
-	req_lock = lock;
+	req_lock = *lock;
 	
 	return req_err;
 }
@@ -126,6 +140,7 @@ void *thread_request_handler(void *ptr)
 {
 	commandlist_t* command_list;
 	int sockfd, n, i;
+	char* junk;
 	socklen_t len;
 	char mesg[100];
 	char sendmesg[200] = {0};
@@ -144,12 +159,17 @@ void *thread_request_handler(void *ptr)
 	{
 		len = sizeof(cliaddr);
 		n = recvfrom(sockfd, mesg, 1000, 0, (struct sockaddr *)&cliaddr, &len);
-		printf("-------------------------------------------------------\n");
 		mesg[n] = 0;
+		printf("-------------------------------------------------------\n");
+		printf("Received: %s\r\n", mesg);
+		
 		i = 0;
-		printf("Received: %s\r\n",mesg);
+		strcpy(sendmesg, "");
+		while ( (strlen(command_list[i].request) != 0) &&
+		        (strncmp(command_list[i].request, mesg, strlen(command_list[i].request)) != 0) )
+			i++;
 
-		while (command_list[i].request != NULL)
+		if (strlen(command_list[i].request) != 0)
 		{
 			if (command_list[i].commandfunc != NULL)
 			{
@@ -160,41 +180,33 @@ void *thread_request_handler(void *ptr)
 			else if (command_list[i].data != NULL)
 			{
 			   // There is no function defined, lets 'stringize' the given variable & respond with that
-			    pthread_mutex_lock(req_lock);
+			    pthread_mutex_lock(&req_lock);
 			    switch (command_list[i].data_type)
 			    {
 				case TYPE_INTEGER:
+				    *(int*)command_list[i].data = strtol(&mesg[strlen(command_list[i].request) + 1], &junk, 0);
 				    sprintf(sendmesg, "%s=%u\r\n", command_list[i].tag, *(int*)command_list[i].data);
 				    break;
 				case TYPE_FLOAT:
+				    *(float*)command_list[i].data = atof(&mesg[strlen(command_list[i].request) + 1]);
 				    sprintf(sendmesg, "%s=%.1f\r\n", command_list[i].tag, *(float*)command_list[i].data);
 				    break;
 				case TYPE_STRING:
+				    strcpy(*(char**)command_list[i].data, &mesg[strlen(command_list[i].request) + 1]);
 				    sprintf(sendmesg, "%s=%s\r\n", command_list[i].tag, *(char**)command_list[i].data);
 				    break;
 				case TYPE_NULL:
 				    break;
 			    }
-			    pthread_mutex_unlock(req_lock);
+			    pthread_mutex_unlock(&req_lock);
 			}
-			else 
-				// We dont have a function or data we can respond with! Now what???
-				req_err = -1;
-				return NULL;
 			
 			sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));				
-			
-			i++;
+			printf("Responded: %s\r\n", sendmesg);
+			printf("-------------------------------------------------------\n");
 		}
-		
-		if (command_list[i].request == NULL)
-		{
-			sprintf(sendmesg, "INVALID COMMAND\r\n");
-			sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-		}			
-			
-		printf("Responded: %s", sendmesg);
-		printf("-------------------------------------------------------\n");
+		else			
+			printf("INVALID COMMAND\r\n");
 	}
 	
 	req_err = 0;
@@ -217,7 +229,7 @@ int tp_handle_data_push(pushlist_t* pushlist, pthread_mutex_t* lock)
 		return 0;
 	}
 	
-	push_lock = lock;
+	push_lock = *lock;
 	
 	return push_err;
 }
@@ -225,10 +237,12 @@ int tp_handle_data_push(pushlist_t* pushlist, pthread_mutex_t* lock)
 void *thread_data_push(void *ptr) 
 {
 	int sockfd;
-	char sendmesg[1000] = {0};
+	char sendmesg[100] = {0};
 		
 	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-	alladdr.sin_addr.s_addr=htonl(INADDR_BROADCAST);
+	alladdr.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+	
+	pushlist = (pushlist_t*)ptr;
 	
 	while (!transport.exit)
 	{
@@ -259,41 +273,40 @@ void data_push(pushlist_t* pushlist)
 	printf("Pushing data...\r\n");
 	
 	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-
+	
 	// Send sensor data to host
 	i = 0;
-	while (pushlist[i].tag != NULL)
+	while (strlen(pushlist[i].tag) != 0)
 	{
 		if (pushlist[i].data_type == TYPE_INTEGER)
 		{
-		    pthread_mutex_lock(push_lock);
+		    pthread_mutex_lock(&push_lock);
 		    sprintf(sendmesg, "%s=%u\r\n", pushlist[i].tag, *(unsigned int*)pushlist[i].data);
-		    pthread_mutex_unlock(push_lock);
-		    sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-		    printf("%s", sendmesg);
+		    pthread_mutex_unlock(&push_lock);
+		    sendto(sockfd,sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&cliaddr,sizeof(cliaddr));
 		}
 		else if (pushlist[i].data_type == TYPE_FLOAT)
 		{
-		    pthread_mutex_lock(push_lock);
+		    pthread_mutex_lock(&push_lock);
 		    sprintf(sendmesg, "%s=%.1f\r\n", pushlist[i].tag, *(float*)pushlist[i].data);
-		    pthread_mutex_unlock(push_lock);
-		    sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-		    printf("%s", sendmesg);
+		    pthread_mutex_unlock(&push_lock);
+		    sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&cliaddr,sizeof(cliaddr));
 		}
 		else if (pushlist[i].data_type == TYPE_STRING)
 		{
-		    pthread_mutex_lock(push_lock);
+		    pthread_mutex_lock(&push_lock);
 		    sprintf(sendmesg, "%s=%s\r\n", pushlist[i].tag, (char*)pushlist[i].data);
-		    pthread_mutex_unlock(push_lock);
-		    sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-		    printf("%s", sendmesg);
+		    pthread_mutex_unlock(&push_lock);
+		    sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&cliaddr,sizeof(cliaddr));
 		}
 
+		printf("%s", sendmesg);
+		
 		i++;
 	}
     
-	sprintf(sendmesg, "SEQUENCENUMBER=%u\r\n", transport.sequencenumber);
-	sendto(sockfd,sendmesg,sizeof(sendmesg),0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
+	sprintf(sendmesg, "%s=%u\r\n", sequence_number.tag, *(unsigned int*)sequence_number.data);
+	sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&cliaddr,sizeof(cliaddr));
 	printf("%s", sendmesg);
 	
 	transport.sequencenumber++;

@@ -75,6 +75,14 @@ typedef int (*cmdfunc)(char* request, char* response);
 int morse(char* request, char* response); 
 int app_exit(char* request, char* response);
 
+pushlist_t pushlist[] = { 
+{ "HUMIDITY", TYPE_FLOAT,   &status.humidity_pct}, 
+{ "TEMP",     TYPE_FLOAT,   &status.temp_f}, 
+{ "DISTANCE", TYPE_FLOAT,   &status.distance_in},
+{ "BEEPER",   TYPE_INTEGER, &status.beeper},
+{ "",         TYPE_NULL,    NULL} 
+};
+
 commandlist_t commandlist[] = { 
 { "GETHUMIDITY",     "HUMIDITY",     NULL,      TYPE_FLOAT,   &status.humidity_pct}, 
 { "GETTEMP",         "TEMP",         NULL,      TYPE_FLOAT,   &status.temp_f}, 
@@ -86,14 +94,6 @@ commandlist_t commandlist[] = {
 { "",                "",             NULL,      TYPE_NULL,    NULL}
 };
  
-pushlist_t pushlist[] = { \
-{ "HUMIDITY", TYPE_FLOAT,   &status.humidity_pct}, 
-{ "TEMP",     TYPE_FLOAT,   &status.temp_f}, 
-{ "DISTANCE", TYPE_FLOAT,   &status.distance_in},
-{ "BEEPER",   TYPE_INTEGER, &status.beeper},
-{ "",         TYPE_NULL,    NULL} 
-};
-
 commandlist_t* find_request(char* request)
 {
 	int i;
@@ -167,7 +167,9 @@ int  main(void)
 	int  iret1;
 	pthread_t sensor_sample;
 
-	// Setup GPIO's, Timers, Interrupts, etc
+	printf("Sump Launch...\r\n");
+
+ 	// Setup GPIO's, Timers, Interrupts, etc
 	wiringPiSetup() ;
 
 	// Initialize sensors
@@ -179,7 +181,7 @@ int  main(void)
 	if(iret1)
 	{
 		BeepMorse(5, "Mutex Fail");
-		fprintf(stderr,"Error - mutex init failed, return code: %d\n",iret1);
+		printf("Error - mutex init failed, return code: %d\n",iret1);
 		return -1;
 	}
 
@@ -190,7 +192,7 @@ int  main(void)
 	iret1 = pthread_create( &sensor_sample, NULL, thread_sensor_sample, NULL);
 	if(iret1)
 	{
-		fprintf(stderr,"Error - pthread_create() return code: %d\n",iret1);
+		printf("Error - pthread_create() return code: %d\n",iret1);
 		BeepMorse(5, "thread_sensor_sample Thread Create Fail");
 		return -2;
 	}
@@ -209,6 +211,8 @@ int  main(void)
 	pthread_mutex_destroy(&lock);
 
 	BeepMorse(5, "Exit");
+	
+	while(1);
 	
 	return 0;
 }
