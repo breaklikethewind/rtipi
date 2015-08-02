@@ -65,6 +65,7 @@ typedef struct
 status_t status;
 int sensor_period = DEFAULT_SENSOR_PERIOD;
 int exitflag = 0;
+int firstsampleflag = 0;
 pthread_mutex_t lock; // sync between UDP thread and main
 commandlist_t command_list;
 void *thread_sensor_sample( void *ptr );
@@ -94,38 +95,20 @@ commandlist_t commandlist[] = {
 { "",                "",             NULL,      TYPE_NULL,    NULL}
 };
  
-commandlist_t* find_request(char* request)
-{
-	int i;
-	
-	i = 0;
-	while(commandlist[i].request != NULL)
-	{
-		if (strcmp(commandlist[i].request, request) == 0)
-			continue;
-	}
- 
-	if (strcmp(commandlist[i].request, "") == 0)
-		return NULL;
-	else
-		return &(commandlist[i]);
-}
-
 int morse(char* request, char* response) 
 {
-	commandlist_t* command;
-	
-	command = find_request(request);
 	BeepMorse(5, request);
-	strcpy(response, command->request);
+	strcpy(response, request);
 	
 	return 0;
 }
 
 int app_exit(char* request, char* response)
 {
-	exitflag = 1;
-	sprintf(response, "1");
+	char* junk;
+
+	exitflag = strtol(request, &junk, 0);
+	sprintf(response, "%u", exitflag);
 	
 	return 0;
 }
@@ -153,6 +136,8 @@ void measure( void )
 		
 	pthread_mutex_lock(&lock);
 	dht_read_val(&status.temp_f, &temp_c, &status.humidity_pct);
+	
+	firstsampleflag = 1;
 	pthread_mutex_unlock(&lock);
 }
 
@@ -185,10 +170,6 @@ int  main(void)
 		return -1;
 	}
 
-	tp_handle_requests(commandlist, &lock);
-	
-	tp_handle_data_push(pushlist, &lock);
-
 	iret1 = pthread_create( &sensor_sample, NULL, thread_sensor_sample, NULL);
 	if(iret1)
 	{
@@ -198,6 +179,13 @@ int  main(void)
 	}
 	else
 		printf("Launching thread sensor_sample\r\n");
+
+	// wait until we have our first sample
+	while(!firstsampleflag);
+	
+	tp_handle_requests(commandlist, &lock);
+	
+	tp_handle_data_push(pushlist, &lock);
 
 	BeepMorse(5, "OK");
 	

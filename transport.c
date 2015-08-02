@@ -53,6 +53,7 @@ typedef struct transport
 void *thread_data_push(void *ptr);
 void *thread_request_handler(void *ptr);
 void data_push(pushlist_t* pushlist);
+int pair(char* request, char* response);
 int sendupdate(char* request, char* response);
 
 struct sockaddr_in servaddr, cliaddr, alladdr;
@@ -69,10 +70,11 @@ int push_err = 0;
 commandlist_t sequence_number = 
 { "",        "SEQUENCENUMBER",       NULL, TYPE_INTEGER, &transport.sequencenumber};
 
+#define PAIR_COMMAND 0 // this is needed to advertise the need to pair
 commandlist_t transport_commands[] = { 
+{ "SETPAIR",         "PAIR",         &pair, TYPE_INTEGER, NULL},
 { "SHUTDOWN",        "SHUTDOWN",     NULL, TYPE_INTEGER, &transport.exit},
 { "SETPUSHPERIOD",   "PUSHPERIOD",   NULL, TYPE_INTEGER, &transport.push_period},
-{ "SETPAIR",         "PAIR",         NULL, TYPE_INTEGER, &transport.paired},
 { "SENDUPDATE",      "UPDATE",       &sendupdate, TYPE_INTEGER, NULL},
 { "",                "",             NULL, TYPE_NULL,    NULL} 
 };
@@ -81,6 +83,21 @@ int sendupdate(char* request, char* response)
 {
 	sprintf(response, "1");
 	data_push(pushlist);
+	
+	return 0;
+}
+
+int pair(char* request, char* response)
+{
+	char* junk;
+
+	transport.paired = strtol(request, &junk, 0);
+	sprintf(response, "%u", transport.paired);
+	
+	if (transport.paired)
+		printf("Paired with %s\r\n", inet_ntoa(cliaddr.sin_addr));
+	else
+		printf("Un-paired\r\n");
 	
 	return 0;
 }
@@ -160,8 +177,8 @@ void *thread_request_handler(void *ptr)
 		len = sizeof(cliaddr);
 		n = recvfrom(sockfd, mesg, 1000, 0, (struct sockaddr *)&cliaddr, &len);
 		mesg[n] = 0;
-		printf("-------------------------------------------------------\n");
-		printf("Received: %s\r\n", mesg);
+		printf("-------------------------------------------------------\r\n");
+		printf("Received: %s\r\n\r\n", mesg);
 		
 		i = 0;
 		strcpy(sendmesg, "");
@@ -174,7 +191,7 @@ void *thread_request_handler(void *ptr)
 			if (command_list[i].commandfunc != NULL)
 			{
 			    // There is a function defined, call the function to get the data string
-			    command_list[i].commandfunc(command_list[i].tag, commandfuncdata);
+			    command_list[i].commandfunc(&mesg[strlen(command_list[i].request) + 1], commandfuncdata);
 			    sprintf(sendmesg, "%s=%s\r\n", command_list[i].tag, commandfuncdata);
 			}
 			else if (command_list[i].data != NULL)
@@ -202,8 +219,8 @@ void *thread_request_handler(void *ptr)
 			}
 			
 			sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));				
-			printf("Responded: %s\r\n", sendmesg);
-			printf("-------------------------------------------------------\n");
+			printf("\r\nResponded: %s", sendmesg);
+			printf("-------------------------------------------------------\r\n");
 		}
 		else			
 			printf("INVALID COMMAND\r\n");
@@ -248,7 +265,7 @@ void *thread_data_push(void *ptr)
 	{
 		if (!transport.paired)
 		{
-			sprintf(sendmesg, "PAIR=0\r\n");
+			sprintf(sendmesg, "%s=0\r\n", commandlist[PAIR_COMMAND].tag);
 			sendto(sockfd, sendmesg, sizeof(sendmesg), 0, (struct sockaddr *)&alladdr, sizeof(alladdr));
 			printf("Broadcasting 'PAIR=0', to establish pairing\r\n");
 			sleep(PAIR_PERIOD);
@@ -310,8 +327,6 @@ void data_push(pushlist_t* pushlist)
 	printf("%s", sendmesg);
 	
 	transport.sequencenumber++;
-
-    printf("\r\n");
 }
 
 
