@@ -39,7 +39,51 @@
 #include <sys/mman.h>
 #include "range.h"
 
-#define TIMER_BASE 0x20003000
+// Use this define for Raspberry PI A, B, B+
+#define ARMV6
+// Use this define for Raspberry PI B2
+//#define ARMV7
+
+#ifdef ARMV6
+// Physical addresses for various peripheral register sets
+/// Base Physical Address of the ARMV6 BCM 2835 peripheral registers
+#define BCM2835_PERI_BASE               0x20000000
+#endif
+
+#ifdef ARMV7
+/// Base Physical Address of the ARMV7 BCM 2835 peripheral registers
+#define BCM2835_PERI_BASE               0x3F000000
+#endif
+
+#if (defined ARMV7) && (defined ARMV6)
+#error MUST CHOOSE EITHER AMRV6, or ARMV7, NOT BOTH
+#endif
+
+/// Base Physical Address of the System Timer registers
+#define BCM2835_ST_BASE         (BCM2835_PERI_BASE + 0x3000)
+
+/// Base Physical Address of the Pads registers
+#define BCM2835_GPIO_PADS       (BCM2835_PERI_BASE + 0x100000)
+
+/// Base Physical Address of the Clock/timer registers
+#define BCM2835_CLOCK_BASE      (BCM2835_PERI_BASE + 0x101000)
+
+/// Base Physical Address of the GPIO registers
+#define BCM2835_GPIO_BASE       (BCM2835_PERI_BASE + 0x200000)
+
+/// Base Physical Address of the SPI0 registers
+#define BCM2835_SPI0_BASE       (BCM2835_PERI_BASE + 0x204000)
+
+/// Base Physical Address of the BSC0 registers
+#define BCM2835_BSC0_BASE       (BCM2835_PERI_BASE + 0x205000)
+
+/// Base Physical Address of the PWM registers
+#define BCM2835_GPIO_PWM        (BCM2835_PERI_BASE + 0x20C000)
+
+/// Base Physical Address of the BSC1 registers
+#define BCM2835_BSC1_BASE       (BCM2835_PERI_BASE + 0x804000)
+
+#define TIMER_BASE BCM2835_ST_BASE
 
 #define TRIGGER_PULSE_US 10 // Minimum HC-S04 trigger pulse time
 #define MAX_DISTANCE_US 23307 // Max distance of HC-S04 in terms of time
