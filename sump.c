@@ -53,6 +53,14 @@
 
 #define DEFAULT_SENSOR_PERIOD 60 // Seconds
 
+
+struct sockaddr_in servaddr;
+
+int sockfd;
+int rtiUdpPort;
+/* This is unique per application instance and RTI driver instance */
+#define RTI_UDP_PORT 32001
+
 typedef struct
 {
 	float humidity_pct;
@@ -84,7 +92,7 @@ pushlist_t pushlist[] = {
 { "",         TYPE_NULL,    NULL} 
 };
 
-commandlist_t commandlist[] = { 
+commandlist_t device_commandlist[] = { 
 { "GETHUMIDITY",     "HUMIDITY",     NULL,      TYPE_FLOAT,   &status.humidity_pct}, 
 { "GETTEMP",         "TEMP",         NULL,      TYPE_FLOAT,   &status.temp_f}, 
 { "GETDISTANCE",     "DISTANCE",     NULL,      TYPE_FLOAT,   &status.distance_in},
@@ -150,16 +158,26 @@ void measure( void )
 int  main(void)
 {
 	int  iret1;
+	int broadcast;
 	pthread_t sensor_sample;
 
 	printf("Sump Launch...\r\n");
-
- 	// Setup GPIO's, Timers, Interrupts, etc
-	wiringPiSetup() ;
+	// Setup GPIO's, Timers, Interrupts, etc
+	if (wiringPiSetup() == -1)
+		exit(1);
+	/* Set up the socket */
+	rtiUdpPort = RTI_UDP_PORT;
+	broadcast = 1;
+	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+	setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof broadcast);
+	servaddr.sin_family = AF_INET;
+	servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+	servaddr.sin_port = htons(rtiUdpPort);
+	bind(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr));
 
 	// Initialize sensors
 	BeepInit(BeepPin, 0);
-	RangeInit(EchoPin, TriggerPin, 0);
+	RangeInit(EchoPin, TriggerPin, 1);
 	dht_init(DHTPin);
 	
 	iret1 = pthread_mutex_init(&lock, NULL); 
@@ -170,6 +188,7 @@ int  main(void)
 		return -1;
 	}
 
+	/* Initialize the threads */
 	iret1 = pthread_create( &sensor_sample, NULL, thread_sensor_sample, NULL);
 	if(iret1)
 	{
@@ -183,7 +202,7 @@ int  main(void)
 	// wait until we have our first sample
 	while(!firstsampleflag);
 	
-	tp_handle_requests(commandlist, &lock);
+	tp_handle_requests(device_commandlist, &lock);
 	
 	tp_handle_data_push(pushlist, &lock);
 

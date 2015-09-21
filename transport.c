@@ -39,13 +39,15 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include "transport.h"
+#include <limits.h>
 
 #define PAIR_PERIOD 30
+#define DEFAULT_PUSH_PERIOD 300 // Seconds
 
 typedef struct transport
 {
 	int paired;
-	int sequencenumber;
+	unsigned int sequencenumber;
 	int exit;
 	int push_period;
 } transport_t;    
@@ -56,12 +58,15 @@ void data_push(pushlist_t* pushlist);
 int pair(char* request, char* response);
 int sendupdate(char* request, char* response);
 
-struct sockaddr_in servaddr, cliaddr, alladdr;
+struct sockaddr_in cliaddr, alladdr;
 static pthread_t request_thread, push_thread;
 static transport_t transport;
 static pushlist_t* pushlist;
 static pthread_mutex_t req_lock; 
 static pthread_mutex_t push_lock;
+
+extern int sockfd;
+extern int rtiUdpPort;
 
 commandlist_t commandlist[100]; // keep simple, statically allocate 100 possible commands
 int req_err = 0;
@@ -91,6 +96,7 @@ int pair(char* request, char* response)
 {
 	char* junk;
 
+	printf("pair request=%s,reqlen=%d\r\n", request, strlen(request));
 	transport.paired = strtol(request, &junk, 0);
 	sprintf(response, "%u", transport.paired);
 	
@@ -99,6 +105,7 @@ int pair(char* request, char* response)
 	else
 		printf("Un-paired\r\n");
 	
+	printf("pair request=%s,reqlen=%d,response=%s\n", request, strlen(request), response);
 	return 0;
 }
 
@@ -119,7 +126,7 @@ void tp_stop_handlers()
 
 int tp_handle_requests(commandlist_t* device_commandlist, pthread_mutex_t* lock)
 {
-	int i;
+	int i, j;
 	int err;
 
 	// merge device command list, and transport command list
@@ -130,10 +137,12 @@ int tp_handle_requests(commandlist_t* device_commandlist, pthread_mutex_t* lock)
 		i++;
 	}
 
-	while(strlen(device_commandlist[i].request) != 0)
+	j = 0;
+	while(strlen(device_commandlist[j].request) != 0)
 	{
-		memcpy((void*)&(commandlist[i]), (void*)&(device_commandlist[i]), sizeof(commandlist_t));
+		memcpy((void*)&(commandlist[i]), (void*)&(device_commandlist[j]), sizeof(commandlist_t));
 		i++;
+		j++;
 	}
     
 	err = pthread_create( &request_thread, NULL, thread_request_handler, (void*)&commandlist);
@@ -145,7 +154,6 @@ int tp_handle_requests(commandlist_t* device_commandlist, pthread_mutex_t* lock)
 	else
 	{
 		printf("Launching thread request_handler\r\n");
-		return 0;
 	}
 	
 	req_lock = *lock;
@@ -156,7 +164,7 @@ int tp_handle_requests(commandlist_t* device_commandlist, pthread_mutex_t* lock)
 void *thread_request_handler(void *ptr) 
 {
 	commandlist_t* command_list;
-	int sockfd, n, i;
+	int n, i;
 	char* junk;
 	socklen_t len;
 	char mesg[100];
@@ -165,12 +173,8 @@ void *thread_request_handler(void *ptr)
 	
 	command_list = (commandlist_t*)ptr;
 
-	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-
-	servaddr.sin_family = AF_INET;
-	servaddr.sin_addr.s_addr=htonl(INADDR_ANY);
-	servaddr.sin_port=htons(32000);
-	bind(sockfd,(struct sockaddr *)&servaddr,sizeof(servaddr));
+	/* Default to DEFAULT_PUSH_PERIOD, in case the PAIR command comes before the push interval command */
+	transport.push_period = DEFAULT_PUSH_PERIOD;
 
 	while (!transport.exit)
 	{
@@ -184,7 +188,9 @@ void *thread_request_handler(void *ptr)
 		strcpy(sendmesg, "");
 		while ( (strlen(command_list[i].request) != 0) &&
 		        (strncmp(command_list[i].request, mesg, strlen(command_list[i].request)) != 0) )
+		{
 			i++;
+		}
 
 		if (strlen(command_list[i].request) != 0)
 		{
@@ -242,7 +248,7 @@ int tp_handle_data_push(pushlist_t* pushlist, pthread_mutex_t* lock)
 	}
 	else
 	{
-		printf("Launching thread request_handler\r\n");
+		printf("Launching thread push_thread\r\n");
 		return 0;
 	}
 	
@@ -253,12 +259,14 @@ int tp_handle_data_push(pushlist_t* pushlist, pthread_mutex_t* lock)
 
 void *thread_data_push(void *ptr) 
 {
-	int sockfd;
 	char sendmesg[100] = {0};
-		
-	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-	alladdr.sin_addr.s_addr = htonl(INADDR_BROADCAST);
-	
+	printf("thread_data_push+++ transport.exit = %d\r\n", transport.exit);
+
+	memset(&alladdr, 0, sizeof(alladdr));
+	alladdr.sin_family = AF_INET;
+	alladdr.sin_addr.s_addr = inet_addr("192.168.1.255");
+	alladdr.sin_port = htons(rtiUdpPort);
+
 	pushlist = (pushlist_t*)ptr;
 	
 	while (!transport.exit)
@@ -284,12 +292,9 @@ void *thread_data_push(void *ptr)
 void data_push(pushlist_t* pushlist)
 {
 	int i;
-	int sockfd;
 	char sendmesg[100] = {0};
 	
 	printf("Pushing data...\r\n");
-	
-	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
 	
 	// Send sensor data to host
 	i = 0;
