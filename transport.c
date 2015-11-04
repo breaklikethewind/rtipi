@@ -33,6 +33,7 @@
 #include <pthread.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/time.h>
 #include <time.h>
 #include <arpa/inet.h>
 #include <signal.h>
@@ -64,6 +65,8 @@ static transport_t transport;
 static pushlist_t* pushlist;
 static pthread_mutex_t req_lock; 
 static pthread_mutex_t push_lock;
+static pthread_cond_t cond  = PTHREAD_COND_INITIALIZER;
+static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 extern int sockfd;
 extern int rtiUdpPort;
@@ -198,6 +201,8 @@ void *thread_request_handler(void *ptr)
 			{
 			    // There is a function defined, call the function to get the data string
 			    command_list[i].commandfunc(&mesg[strlen(command_list[i].request) + 1], commandfuncdata);
+			    // Future enhancement: Next, check for command_list[i].data. If not null, build response
+			    //                     string using that data, instead of commandfuncdata.
 			    sprintf(sendmesg, "%s=%s\r\n", command_list[i].tag, commandfuncdata);
 			}
 			else if (command_list[i].data != NULL)
@@ -259,7 +264,14 @@ int tp_handle_data_push(pushlist_t* pushlist, pthread_mutex_t* lock)
 
 void *thread_data_push(void *ptr) 
 {
+	int               rc;
+	struct timespec   ts;
+	struct timeval    tp;
 	char sendmesg[100] = {0};
+	
+	pthread_mutex_init(&mutex, NULL);
+	pthread_mutex_lock(&mutex);
+	
 	printf("thread_data_push+++ transport.exit = %d\r\n", transport.exit);
 
 	memset(&alladdr, 0, sizeof(alladdr));
@@ -281,12 +293,37 @@ void *thread_data_push(void *ptr)
 		else
 		{
 			data_push((pushlist_t*)ptr);
-			sleep(transport.push_period);
+//			sleep(transport.push_period);
+			
+			/* Get absolute time of wait end */
+			rc = gettimeofday(&tp, NULL);
+			if (rc)
+				printf("%s[%u] failed gettimeofday(): %i\r\n", __FUNCTION__, __LINE__, rc);
+			ts.tv_sec  = tp.tv_sec;
+			ts.tv_nsec = tp.tv_usec * 1000;
+			ts.tv_sec += transport.push_period;  // seconds
+			
+			rc = pthread_cond_timedwait(&cond, &mutex, &ts);
 		}
 	}
 	
+    pthread_mutex_unlock(&mutex);
+	
+	pthread_cond_destroy(&cond);
+	pthread_mutex_destroy(&mutex);
 	push_err = 0;
 	return NULL;
+}
+
+void tp_force_data_push(void)
+{
+	if (transport.paired)
+	{
+		printf("Asynchronous Push!\r\n");
+		pthread_mutex_lock(&mutex);
+		pthread_cond_signal(&cond);
+		pthread_mutex_unlock(&mutex);
+	}
 }
 
 void data_push(pushlist_t* pushlist)
